@@ -2,8 +2,10 @@ package engine
 
 import (
 	"fmt"
+
 	"github.com/senarukana/rationaldb/engine/proto"
 	"github.com/senarukana/rationaldb/ratgo"
+	rocksdbEngine "github.com/senarukana/rationaldb/vt/engine"
 )
 
 type RocksDbConnectionParams struct {
