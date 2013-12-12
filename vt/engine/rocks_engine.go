@@ -106,10 +106,13 @@ func (engine *rocksDbEngine) Insert(tableInfo *schema.Table, insertedRowValues [
 	return qr, nil
 }
 
-func (engine *rocksDbEngine) Delete(tableInfo *schema.Table, primaryKeys []string, sync bool) {
+func (engine *rocksDbEngine) Delete(tableInfo *schema.Table, primaryKeys []string, sync bool) (qr *proto.QueryResult, err error) {
 	wo := ratgo.NewWriteOptions()
+	defer wo.Close()
 	wo.SetSync(sync)
 	batch := ratgo.NewWriteBatch()
+	defer batch.Close()
+
 	tableName := tableInfo.Name
 	var key string
 	for _, pk := range primaryKeys {
@@ -131,4 +134,91 @@ func (engine *rocksDbEngine) Delete(tableInfo *schema.Table, primaryKeys []strin
 	qr = new(proto.QueryResult)
 	qr.RowsAffected = len(insertedValue)
 	return qr, nil
+}
+
+func (engine *rocksDbEngine) Update(tableInfo *schema.Table, primaryKeys []string, updateValues map[string]sqltypes.Value, sync bool) (qr *proto.QueryResult, err error) {
+	wo := ratgo.NewWriteOptions()
+	defer wo.Close()
+	wo.SetSync(sync)
+
+	batch := ratgo.NewWriteBatch()
+	defer batch.Close()
+
+	tableName := tableInfo.Name
+	var key string
+	for _, pk := range primaryKeys {
+		for columnName, value := range updateValues {
+			key = fmt.Sprintf("%s|%s|%s", tableName, columnName, pk)
+			batch.Put(key, value)
+		}
+	}
+	err = engine.db.Write(wo, batch)
+	if err != nil {
+		log.Error("Rocksdb Update error, %v", err.Error())
+	}
+	qr = new(proto.QueryResult)
+	qr.RowsAffected = len(primaryKeys)
+	return qr, nil
+}
+
+func (engine *rocksDbEngine) Select(tableInfo *schema.Table, primaryKeys []string, fields []string, ro *ratgo.ReadOptions) (qr *proto.QueryResult, err error) {
+	tableName := tableInfo.Name
+	// gather keys
+	keys := make([]string, len(primaryKeys)*len(fields))
+	for i, pk := range primaryKeys {
+		for j, field := range fields {
+			keys[i*len[primaryKeys]+j] = fmt.Sprintf("%s|%s|%s", tableName, field, pk)
+		}
+	}
+
+	results, errors := engine.db.MultiGet(ro, keys)
+
+	// if any errors occured, give up this result
+	qr = new(proto.QueryResult)
+	qr.RowsAffected = len(primaryKeys)
+	qr.Rows = make([][]sqltypes.Value, len(primaryKeys))
+	// gather results
+	for i := range primaryKeys {
+		row := qr.Rows[i]
+		row = make([]sqltypes.Value, len(fields))
+		for j, field := range fields {
+			idx := i*len(fields) + j
+			if errors[idx] != nil {
+				return nil, err
+			}
+			result := results[idx]
+			column := tableInfo.Columns[tableInfo.FindColumn(field)]
+			// check if default value is set
+			if result == nil {
+				row[j] = column.Default
+			} else {
+				row[j] = BuildValue(result, column.Type)
+			}
+		}
+	}
+
+	qr.Fields = make(qr.Fields, len(fields))
+	for i, field := range fields {
+		columnIdx := tableInfo.FindColumn(field)
+		if columnIdx == -1 {
+			return nil, fmt.Errorf("Field %s doesn't exist in the Table:%s", field, tableName)
+		}
+		qr.Fields[i] = proto.Field{Name: field, Type: tableInfo.Columns[columnIdx].Type}
+	}
+	return qr, nil
+}
+
+func (engine *rocksDbEngine) SelectSub(tableInfo *schema.Table, selectValue []proto.FieldValue, ro *ratgo.ReadOptions) (primaryKeys []string, err error) {
+
+}
+
+func BuildValue(bytes []byte, filedType uint32) sqltypes.Value {
+	switch filedType {
+	case schema.TYPE_FRACTIONAL:
+		return sqltypes.MakeFractional(bytes)
+	case schema.TYPE_NUMERIC:
+		return sqltypes.MakeNumeric(bytes)
+	case schema.TYPE_OTHER:
+		return sqltypes.MakeString(bytes)
+	}
 }

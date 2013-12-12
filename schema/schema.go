@@ -12,8 +12,13 @@ import (
 const (
 	CAT_OTHER = iota
 	CAT_NUMBER
-	CAT_UUID
 	CAT_VARBINARY
+)
+
+const (
+	TYPE_OTHER = iota
+	TYPE_NUMERIC
+	TYPE_FRACTIONAL
 )
 
 // Cache types
@@ -46,6 +51,7 @@ func (self *Table) Json() string {
 type TableColumn struct {
 	Name          string
 	Category      int
+	Type          int
 	Nullable      bool
 	Default       sqltypes.Value
 	IsAuto        bool
