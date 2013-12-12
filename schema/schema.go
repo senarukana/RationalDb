@@ -2,6 +2,7 @@ package schema
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/senarukana/rationaldb/jscfg"
 	"github.com/senarukana/rationaldb/sqltypes"
@@ -11,6 +12,7 @@ import (
 const (
 	CAT_OTHER = iota
 	CAT_NUMBER
+	CAT_UUID
 	CAT_VARBINARY
 )
 
@@ -25,7 +27,7 @@ type Table struct {
 	Name      string
 	Columns   []TableColumn
 	Indexes   []*Index
-	PKColumns []int
+	PKColumn  int
 	CacheType int
 }
 
@@ -42,10 +44,29 @@ func (self *Table) Json() string {
 }
 
 type TableColumn struct {
-	Name     string
-	Category int
-	IsAuto   bool
-	Default  sqltypes.Value
+	Name          string
+	Category      int
+	Nullable      bool
+	Default       sqltypes.Value
+	IsAuto        bool
+	IncrementalID uint64
+	Mutex         *sync.Mutex
+	IsUUID        bool
+}
+
+func (self *TableColumn) GetNextIncrementalID() (ret uint64) {
+	if !self.IsAuto {
+		panic("GetIncrementalId error, this column is not auto increment")
+	}
+	self.Mutex.Lock()
+	ret = self.IncrementalID
+	self.IncrementalID++
+	self.Mutex.Unlock()
+	return
+}
+
+func (self *Table) GetPKColumn() *TableColumn {
+	return &self.Columns[self.PKColumn]
 }
 
 func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Value, extra string) {
@@ -60,6 +81,8 @@ func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Val
 	}
 	if extra == "auto_increment" {
 		self.Columns[index].IsAuto = true
+		self.Columns[index].Mutex = &sync.Mutex{}
+		self.Columns[index].IncrementalID = 0
 		// Ignore default value, if any
 		return
 	}
@@ -68,9 +91,9 @@ func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Val
 		return
 	}
 	if self.Columns[index].Category == CAT_NUMBER {
-		self.Columns[index].Default = datatypes.MakeNumeric(defval.Raw())
+		self.Columns[index].Default = sqltypes.MakeNumeric(defval.Raw())
 	} else {
-		self.Columns[index].Default = datatypes.MakeString(defval.Raw())
+		self.Columns[index].Default = sqltypes.MakeString(defval.Raw())
 	}
 }
 
@@ -83,9 +106,9 @@ func (ta *Table) FindColumn(name string) int {
 	return -1
 }
 
-func (ta *Table) GetPKColumn(index int) *TableColumn {
+/*func (ta *Table) GetPKColumn(index int) *TableColumn {
 	return &ta.Columns[ta.PKColumns[index]]
-}
+}*/
 
 type Index struct {
 	Name        string

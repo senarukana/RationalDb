@@ -2,8 +2,12 @@ package engine
 
 import (
 	"fmt"
+
 	"github.com/senarukana/ratgo"
 	"github.com/senarukana/rationaldb/engine/proto"
+	"github.com/senarukana/rationaldb/log"
+	"github.com/senarukana/rationaldb/schema"
+	"github.com/senarukana/rationaldb/sqltypes"
 )
 
 type RocksDBConfigs struct {
@@ -15,7 +19,6 @@ type RocksDBConfigs struct {
 }
 
 type RocksDbError struct {
-	Num     int
 	Message string
 	Query   string
 }
@@ -64,6 +67,68 @@ func Init(config *RocksDBConfigs) {
 	rocksEngine.db = db
 }
 
-func (rocksDbEngine *engine) Insert(dbName, tableName string, primaryKeyIndex int, insertedValue [][]proto.FieldValue) (qr *proto.QueryResult, err error) {
+func (engine *rocksDbEngine) Insert(tableInfo *schema.Table, insertedRowValues []map[string]sqltypes.Value, sync bool) (qr *proto.QueryResult, err error) {
+	wo := ratgo.NewWriteOptions()
+	wo.SetSync(sync)
+	batch := ratgo.NewWriteBatch()
+	tableName := tableInfo.Name
+	var key string
+	for i := range insertedRowValues {
+		row := insertedRowValues[i]
+		var pk string
+		pkColumn := tableInfo.GetPKColumn()
+		if pkColumn.IsAuto {
+			pk = string(tableInfo.Columns[tableInfo.PKColumn].GetNextIncrementalID())
+		} else if pkColumn.IsUUID {
 
+		} else {
+			// we've already checked that pk in in the row
+			pk = row[pkColumn.Name].String()
+		}
+		for columnName, columnValue := range row {
+			if columnName == pkColumn.Name {
+				// primary key, we just put a fake 0 as its value
+				key = fmt.Sprintf("%s|%s", tableName, pk)
+				batch.Put(key, []byte{'0'})
+			} else {
+				key = fmt.Sprintf("%s|%s|%s", tableName, columnName, pk)
+				batch.Put(key, columnValue)
+			}
+		}
+	}
+	err = engine.db.Write(wo, batch)
+	if err != nil {
+		log.Error("Rocksdb Insert error, %v", err.Error())
+		return nil, err
+	}
+	qr = new(proto.QueryResult)
+	qr.RowsAffected = len(insertedValue)
+	return qr, nil
+}
+
+func (engine *rocksDbEngine) Delete(tableInfo *schema.Table, primaryKeys []string, sync bool) {
+	wo := ratgo.NewWriteOptions()
+	wo.SetSync(sync)
+	batch := ratgo.NewWriteBatch()
+	tableName := tableInfo.Name
+	var key string
+	for _, pk := range primaryKeys {
+		for _, column := range tableInfo.Columns {
+			if column == tableInfo.GetPKColumn() {
+				key = fmt.Sprintf("%s|%s", tableName, pk)
+				batch.Delete(key)
+			} else {
+				key = fmt.Sprintf("%s|%s|%s", tableName, column.Name, pk)
+				batch.Delete(key)
+			}
+		}
+	}
+	err = engine.db.Write(wo, batch)
+	if err != nil {
+		log.Error("Rocksdb Delete error, %v", err.Error())
+		return nil, err
+	}
+	qr = new(proto.QueryResult)
+	qr.RowsAffected = len(insertedValue)
+	return qr, nil
 }
