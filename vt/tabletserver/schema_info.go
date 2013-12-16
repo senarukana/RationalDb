@@ -12,17 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/senarukana/rationaldb/log"
 	"github.com/senarukana/rationaldb/cache"
+	"github.com/senarukana/rationaldb/log"
 	mproto "github.com/senarukana/rationaldb/mysql/proto"
 	"github.com/senarukana/rationaldb/sqltypes"
-	"github.com/senarukana/rationaldb/stats"
-	"github.com/senarukana/rationaldb/timer"
+	"github.com/senarukana/rationaldb/util/stats"
 	"github.com/senarukana/rationaldb/vt/schema"
 	"github.com/senarukana/rationaldb/vt/sqlparser"
 )
-
-const base_show_tables = "select table_name, table_type, unix_timestamp(create_time), table_comment from information_schema.tables where table_schema = database()"
 
 const maxTableCount = 10000
 
@@ -75,11 +72,10 @@ type SchemaOverride struct {
 type SchemaInfo struct {
 	mu             sync.Mutex
 	tables         map[string]*TableInfo
+	executor       *DbExecutor
 	queryCacheSize int
 	queries        *cache.LRUCache
 	rules          *QueryRules
-	connPool       *ConnectionPool
-	cachePool      *CachePool
 	reloadTime     time.Duration
 	lastChange     time.Time
 	ticks          *timer.Timer
@@ -90,7 +86,6 @@ func NewSchemaInfo(queryCacheSize int, reloadTime time.Duration, idleTimeout tim
 		queryCacheSize: queryCacheSize,
 		queries:        cache.NewLRUCache(int64(queryCacheSize)),
 		rules:          NewQueryRules(),
-		connPool:       NewConnectionPool("", 2, idleTimeout),
 		reloadTime:     reloadTime,
 		ticks:          timer.NewTimer(reloadTime),
 	}
@@ -100,11 +95,6 @@ func NewSchemaInfo(queryCacheSize int, reloadTime time.Duration, idleTimeout tim
 	stats.Publish("QueryCacheOldest", stats.StringFunc(func() string {
 		return fmt.Sprintf("%v", si.queries.Oldest())
 	}))
-	stats.Publish("SchemaReloadTime", stats.DurationFunc(func() time.Duration {
-		return si.reloadTime
-	}))
-	stats.Publish("TableStats", stats.NewMatrixFunc("Table", "Stats", si.getTableStats))
-	stats.Publish("TableInvalidations", stats.CountersFunc(si.getTableInvalidations))
 	stats.Publish("QueryCounts", stats.NewMatrixFunc("Table", "Plan", si.getQueryCount))
 	stats.Publish("QueryTimesNs", stats.NewMatrixFunc("Table", "Plan", si.getQueryTime))
 	stats.Publish("QueryRowCounts", stats.NewMatrixFunc("Table", "Plan", si.getQueryRowCount))
@@ -115,102 +105,20 @@ func NewSchemaInfo(queryCacheSize int, reloadTime time.Duration, idleTimeout tim
 	return si
 }
 
-func (si *SchemaInfo) Open(connFactory CreateConnectionFunc, schemaOverrides []SchemaOverride, cachePool *CachePool, qrs *QueryRules) {
-	si.connPool.Open(connFactory)
-	conn := si.connPool.Get()
-	defer conn.Recycle()
-
-	if !conn.VerifyStrict() {
-		panic(NewTabletError(FATAL, "Could not verify strict mode"))
-	}
-
-	si.cachePool = cachePool
-	tables, err := conn.ExecuteFetch(base_show_tables, maxTableCount, false)
+func (si *SchemaInfo) Open(executor *DbExecutor, qrs *QueryRules) {
+	tables, err := si.executor.ShowTables()
 	if err != nil {
 		panic(NewTabletError(FATAL, "Could not get table list: %v", err))
 	}
 
-	si.tables = make(map[string]*TableInfo, len(tables.Rows))
-	si.tables["dual"] = NewTableInfo(conn, "dual", "VIEW", sqltypes.NULL, "", si.cachePool)
-	for _, row := range tables.Rows {
-		tableName := row[0].String()
-		si.updateLastChange(row[2])
-		tableInfo := NewTableInfo(
-			conn,
-			tableName,
-			row[1].String(), // table_type
-			row[2],          // create_time
-			row[3].String(), // table_comment
-			si.cachePool,
-		)
-		if tableInfo == nil {
-			continue
-		}
+	si.tables = make(map[string]*TableInfo, len(tables))
+	for _, tableInfo := range tables {
 		si.tables[tableName] = tableInfo
-	}
-	if schemaOverrides != nil {
-		si.override(schemaOverrides)
 	}
 	// Clear is not really needed. Doing it for good measure.
 	si.queries.Clear()
 	si.rules = qrs.Copy()
-	si.ticks.Start(func() { si.Reload() })
-}
-
-func (si *SchemaInfo) updateLastChange(createTime sqltypes.Value) {
-	if createTime.IsNull() {
-		return
-	}
-	t, err := strconv.ParseInt(createTime.String(), 10, 64)
-	if err != nil {
-		log.Warn("Could not parse time %s: %v", createTime.String(), err)
-		return
-	}
-	if si.lastChange.Unix() < t {
-		si.lastChange = time.Unix(t, 0)
-	}
-}
-
-func (si *SchemaInfo) override(schemaOverrides []SchemaOverride) {
-	for _, override := range schemaOverrides {
-		table, ok := si.tables[override.Name]
-		if !ok {
-			log.Warn("Table not found for override: %v", override)
-			continue
-		}
-		if override.PKColumns != nil {
-			if err := table.SetPK(override.PKColumns); err != nil {
-				log.Warn("%v: %v", err, override)
-				continue
-			}
-		}
-		if si.cachePool.IsClosed() || override.Cache == nil {
-			continue
-		}
-		switch override.Cache.Type {
-		case "RW":
-			table.CacheType = schema.CACHE_RW
-			table.Cache = NewRowCache(table, si.cachePool)
-		case "W":
-			table.CacheType = schema.CACHE_W
-			if override.Cache.Table == "" {
-				log.Warn("Incomplete cache specs: %v", override)
-				continue
-			}
-			totable, ok := si.tables[override.Cache.Table]
-			if !ok {
-				log.Warn("Table not found: %v", override)
-				continue
-			}
-			if totable.Cache == nil {
-				log.Warn("Table has no cache: %v", override)
-				continue
-			}
-			table.Cache = totable.Cache
-		default:
-			log.Warn("Ignoring cache override: %v", override)
-		}
-	}
+	// si.ticks.Start(func() { si.Reload() })
 }
 
 func (si *SchemaInfo) Close() {
@@ -219,75 +127,6 @@ func (si *SchemaInfo) Close() {
 	si.tables = nil
 	si.queries.Clear()
 	si.rules = NewQueryRules()
-}
-
-func (si *SchemaInfo) Reload() {
-	var err error
-	defer handleError(&err, nil)
-	conn := si.connPool.Get()
-	defer conn.Recycle()
-	tables, err := conn.ExecuteFetch(fmt.Sprintf("%s and unix_timestamp(create_time) > %v", base_show_tables, si.lastChange.Unix()), maxTableCount, false)
-	if err != nil {
-		log.Warn("Could not get table list for reload: %v", err)
-		return
-	}
-	log.Info("Reloading schema")
-	for _, row := range tables.Rows {
-		tableName := row[0].String()
-		si.updateLastChange(row[2])
-		log.Info("Reloading: %s", tableName)
-		si.mu.Lock()
-		_, ok := si.tables[tableName]
-		si.mu.Unlock()
-		if ok {
-			si.DropTable(tableName)
-		}
-		si.createTable(conn, tableName)
-	}
-}
-
-// safe to call this if Close has been called, as si.ticks will be stopped
-// and won't fire
-func (si *SchemaInfo) triggerReload() {
-	si.ticks.Trigger()
-}
-
-func (si *SchemaInfo) CreateTable(tableName string) {
-	conn := si.connPool.Get()
-	defer conn.Recycle()
-	si.createTable(conn, tableName)
-}
-
-func (si *SchemaInfo) createTable(conn PoolConnection, tableName string) {
-	tables, err := conn.ExecuteFetch(fmt.Sprintf("%s and table_name = '%s'", base_show_tables, tableName), 1, false)
-	if err != nil {
-		panic(NewTabletError(FAIL, "Error fetching table %s: %v", tableName, err))
-	}
-	if len(tables.Rows) != 1 {
-		panic(NewTabletError(FAIL, "rows for %s !=1: %v", tableName, len(tables.Rows)))
-	}
-	tableInfo := NewTableInfo(
-		conn,
-		tableName,
-		tables.Rows[0][1].String(), // table_type
-		tables.Rows[0][2],          // create_time
-		tables.Rows[0][3].String(), // table_comment
-		si.cachePool,
-	)
-	if tableInfo == nil {
-		panic(NewTabletError(FATAL, "Could not read table info: %s", tableName))
-	}
-	if tableInfo.CacheType == schema.CACHE_NONE {
-		log.Info("Initialized table: %s", tableName)
-	} else {
-		log.Info("Initialized cached table: %s", tableInfo.Cache.prefix)
-	}
-	si.mu.Lock()
-	defer si.mu.Unlock()
-	if _, ok := si.tables[tableName]; ok {
-		panic(NewTabletError(FAIL, "Table %s already exists", tableName))
-	}
-	si.tables[tableName] = tableInfo
 }
 
 func (si *SchemaInfo) DropTable(tableName string) {
@@ -384,42 +223,6 @@ func (si *SchemaInfo) SetQueryCacheSize(size int) {
 	}
 	si.queryCacheSize = size
 	si.queries.SetCapacity(int64(size))
-}
-
-func (si *SchemaInfo) SetReloadTime(reloadTime time.Duration) {
-	si.reloadTime = reloadTime
-	si.ticks.Trigger()
-	si.ticks.SetInterval(reloadTime)
-}
-
-func (si *SchemaInfo) getTableStats() map[string]map[string]int64 {
-	si.mu.Lock()
-	defer si.mu.Unlock()
-	tstats := make(map[string]map[string]int64)
-	for k, v := range si.tables {
-		if v.CacheType != schema.CACHE_NONE {
-			hits, absent, misses, _ := v.Stats()
-			tblstats := make(map[string]int64)
-			tblstats["Hits"] = hits
-			tblstats["Absent"] = absent
-			tblstats["Misses"] = misses
-			tstats[k] = tblstats
-		}
-	}
-	return tstats
-}
-
-func (si *SchemaInfo) getTableInvalidations() map[string]int64 {
-	si.mu.Lock()
-	defer si.mu.Unlock()
-	tstats := make(map[string]int64)
-	for k, v := range si.tables {
-		if v.CacheType != schema.CACHE_NONE {
-			_, _, _, invalidations := v.Stats()
-			tstats[k] = invalidations
-		}
-	}
-	return tstats
 }
 
 func (si *SchemaInfo) getQueryCount() map[string]map[string]int64 {
@@ -523,28 +326,6 @@ func (si *SchemaInfo) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		} else {
 			response.Write(b)
 		}
-	} else if request.URL.Path == "/debug/table_stats" {
-		response.Header().Set("Content-Type", "application/json; charset=utf-8")
-		si.mu.Lock()
-		tstats := make(map[string]struct{ hits, absent, misses, invalidations int64 })
-		var temp, totals struct{ hits, absent, misses, invalidations int64 }
-		for k, v := range si.tables {
-			if v.CacheType != schema.CACHE_NONE {
-				temp.hits, temp.absent, temp.misses, temp.invalidations = v.Stats()
-				tstats[k] = temp
-				totals.hits += temp.hits
-				totals.absent += temp.absent
-				totals.misses += temp.misses
-				totals.invalidations += temp.invalidations
-			}
-		}
-		si.mu.Unlock()
-		response.Write([]byte("{\n"))
-		for k, v := range tstats {
-			fmt.Fprintf(response, "\"%s\": {\"Hits\": %v, \"Absent\": %v, \"Misses\": %v, \"Invalidations\": %v},\n", k, v.hits, v.absent, v.misses, v.invalidations)
-		}
-		fmt.Fprintf(response, "\"Totals\": {\"Hits\": %v, \"Absent\": %v, \"Misses\": %v, \"Invalidations\": %v}\n", totals.hits, totals.absent, totals.misses, totals.invalidations)
-		response.Write([]byte("}\n"))
 	} else {
 		response.WriteHeader(http.StatusNotFound)
 	}

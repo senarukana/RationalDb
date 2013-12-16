@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/senarukana/rationaldb/log"
-	"github.com/senarukana/rationaldb/stats"
+	"github.com/senarukana/rationaldb/util/stats"
 	_ "net/http/pprof"
 )
 

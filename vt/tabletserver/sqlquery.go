@@ -16,9 +16,9 @@ import (
 	"github.com/senarukana/rationaldb/mysql"
 	mproto "github.com/senarukana/rationaldb/mysql/proto"
 	rpcproto "github.com/senarukana/rationaldb/rpcwrap/proto"
-	"github.com/senarukana/rationaldb/stats"
-	"github.com/senarukana/rationaldb/sync2"
 	"github.com/senarukana/rationaldb/tb"
+	"github.com/senarukana/rationaldb/util/stats"
+	"github.com/senarukana/rationaldb/util/sync2"
 	"github.com/senarukana/rationaldb/vt/dbconfigs"
 	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )

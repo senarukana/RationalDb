@@ -11,7 +11,7 @@ import (
 
 	"github.com/senarukana/rationaldb/log"
 	"github.com/senarukana/rationaldb/sqltypes"
-	"github.com/senarukana/rationaldb/sync2"
+	"github.com/senarukana/rationaldb/util/sync2"
 	"github.com/senarukana/rationaldb/vt/schema"
 )
 

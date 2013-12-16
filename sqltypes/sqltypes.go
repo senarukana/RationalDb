@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/senarukana/rationaldb/hack"
+	"github.com/senarukana/rationaldb/util/hack"
 )
 
 var (

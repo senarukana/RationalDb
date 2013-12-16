@@ -17,7 +17,7 @@ import (
 	rpc "github.com/senarukana/rationaldb/rpcplus"
 	"github.com/senarukana/rationaldb/rpcwrap/auth"
 	"github.com/senarukana/rationaldb/rpcwrap/proto"
-	"github.com/senarukana/rationaldb/stats"
+	"github.com/senarukana/rationaldb/util/stats"
 )
 
 const (

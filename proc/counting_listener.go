@@ -7,7 +7,7 @@ package proc
 import (
 	"net"
 
-	"github.com/senarukana/rationaldb/stats"
+	"github.com/senarukana/rationaldb/util/stats"
 )
 
 type CountingListener struct {

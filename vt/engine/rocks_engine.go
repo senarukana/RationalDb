@@ -8,6 +8,10 @@ import (
 	"github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
+type ErrKeyNotExists string
+
+func (self *ErrKeyNotExists) Error() string { return "Key : " + string(self) + " not exists" }
+
 /*type RocksDbError struct {
 	Message string
 	Query   string
@@ -160,11 +164,50 @@ func (engine *RocksDbEngine) Puts(options *proto.DbWriteOptions, keys [][]byte, 
 }
 
 func (engine *RocksDbEngine) Set(options *proto.DbWriteOptions, key []byte, value []byte) error {
-	return engine.Put(options, key, value)
+	ro := ratgo.NewReadOptions()
+	v, err := engine.DB.Get(ro, key)
+	if err != nil {
+		return err
+	}
+	if v == nil {
+		return ErrKeyNotExists(string(key))
+	}
+	ro.Close()
+
+	wo := ratgo.NewWriteOptions()
+	defer wo.Close()
+	if options != nil {
+		wo.SetSync(options.Sync)
+		wo.SetDisableWAL(options.DisableWAL)
+	}
+	return engine.DB.Put(wo, key, value)
 }
 
 func (engine *RocksDbEngine) Sets(options *proto.DbWriteOptions, keys [][]byte, values [][]byte) error {
-	return engine.Puts(options, keys, values)
+	ro := ratgo.NewReadOptions()
+	vs, errs := engine.DB.MultiGet(ro, keys)
+	for i, v := range vs {
+		if errs[i] != nil {
+			return err
+		}
+		if v == nil {
+			return ErrKeyNotExists(string(key))
+		}
+	}
+	ro.Close()
+
+	wo := ratgo.NewWriteOptions()
+	defer wo.Close()
+	if options != nil {
+		wo.SetSync(options.Sync)
+		wo.SetDisableWAL(options.DisableWAL)
+	}
+	batch := ratgo.NewWriteBatch()
+	defer batch.Close()
+	for i, key := range keys {
+		batch.Put(key, values[i])
+	}
+	return engine.DB.Write(wo, batch)
 }
 
 func (engine *RocksDbEngine) Delete(options *proto.DbWriteOptions, key []byte) error {
@@ -190,6 +233,17 @@ func (engine *RocksDbEngine) Deletes(options *proto.DbWriteOptions, keys [][]byt
 		batch.Delete(key)
 	}
 	return engine.DB.Write(wo, batch)
+}
+
+func (engine *RocksDbEngine) Snapshot() (*proto.DbSnapshot, error) {
+	snap := &proto.DbSnapshot{Snapshot: engine.DB.NewSnapshot()}
+	return snap, nil
+}
+
+func (engine *RocksDbEngine) ReleaseSnapshot(snap *proto.DbSnapshot) error {
+	rocksSnap := snap.Snapshot.(*ratgo.Snapshot)
+	engine.DB.ReleaseSnapshot(rocksSnap)
+	return nil
 }
 
 // TODO
@@ -252,15 +306,8 @@ func (cursor *RocksDbCursor) Value() []byte {
 	return nil
 }
 
-func (engine *RocksDbEngine) Snapshot() (*proto.DbSnapshot, error) {
-	snap := &proto.DbSnapshot{Snapshot: engine.DB.NewSnapshot()}
-	return snap, nil
-}
-
-func (engine *RocksDbEngine) ReleaseSnapshot(snap *proto.DbSnapshot) error {
-	rocksSnap := snap.Snapshot.(*ratgo.Snapshot)
-	engine.DB.ReleaseSnapshot(rocksSnap)
-	return nil
+func (cursor *RocksDbCursor) Error() error {
+	return cursor.iter.GetError()
 }
 
 func init() {

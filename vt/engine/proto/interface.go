@@ -12,6 +12,7 @@ type DbCursor interface {
 	Key() []byte
 	Value() []byte
 	Close()
+	Error() error
 }
 
 type DbSnapshot struct {
