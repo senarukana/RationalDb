@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/senarukana/rationaldb/cache"
-	"github.com/senarukana/rationaldb/mysql/proto"
+	"github.com/senarukana/rationaldb/engine/proto"
 )
 
 var (

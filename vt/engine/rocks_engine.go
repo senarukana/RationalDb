@@ -1,24 +1,14 @@
 package engine
 
 import (
-	"fmt"
+	"bytes"
 
 	"github.com/senarukana/ratgo"
-	"github.com/senarukana/rationaldb/engine/proto"
 	"github.com/senarukana/rationaldb/log"
-	"github.com/senarukana/rationaldb/schema"
-	"github.com/senarukana/rationaldb/sqltypes"
+	"github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
-type RocksDBConfigs struct {
-	DBConfigs
-
-	CreateIfMissing bool
-	ParanoidCheck   bool
-	LRUCacheSize    int
-}
-
-type RocksDbError struct {
+/*type RocksDbError struct {
 	Message string
 	Query   string
 }
@@ -43,182 +33,236 @@ func handleError(err *error) {
 		terr := x.(*RocksDbError)
 		*err = terr
 	}
+}*/
+
+type RocksDbConfigs struct {
+	CreateIfMissing   bool
+	ParanoidCheck     bool
+	LRUCacheSize      int
+	BloomFilterLength int
 }
 
-type rocksDbEngine struct {
-	config RocksDBConfigs
-	db     *ratgo.DB
+type RocksDbEngine struct {
+	config    *DBConfigs
+	dbOptions *ratgo.Options
+	*ratgo.DB
 }
 
-var rocksEngine *rocksDbEngine
+var DefaultRocksDbConf = &RocksDbConfigs{
+	CreateIfMissing:   true,
+	ParanoidCheck:     false,
+	LRUCacheSize:      2 >> 10,
+	BloomFilterLength: 0,
+}
 
-func Init(config *RocksDBConfigs) {
-	rocksEngine.config = config
-
+func NewRocksDbEngine(config *DBConfigs) proto.DbEngine {
+	if config == nil {
+		panic("Not provide engine config")
+	}
+	if config.RocksDbConfigs == nil {
+		config.RocksDbConfigs = DefaultRocksDbConf
+	}
+	rocksEngine := new(RocksDbEngine)
 	options := ratgo.NewOptions()
 	options.SetCreateIfMissing(config.CreateIfMissing)
 	options.SetParanoidChecks(config.ParanoidCheck)
-	options.SetCache(ratgo.NewLRUCache(config.LRUCacheSize))
-
-	db, err := ratgo.Open(config.DbName, options)
-	if err != nil {
-		panic(fmt.Sprintf("open rocksdb:%s failed, err %v", config.DbName, err))
+	if config.LRUCacheSize > 0 {
+		options.SetCache(ratgo.NewLRUCache(config.LRUCacheSize))
 	}
-	rocksEngine.db = db
+	if config.BloomFilterLength > 0 {
+		options.SetFilterPolicy(ratgo.NewBloomFilter(config.BloomFilterLength))
+	}
+	rocksEngine.config = config
+	rocksEngine.dbOptions = options
+	return rocksEngine
 }
 
-func (engine *rocksDbEngine) Insert(tableInfo *schema.Table, insertedRowValues []map[string]sqltypes.Value, sync bool) (qr *proto.QueryResult, err error) {
-	wo := ratgo.NewWriteOptions()
-	wo.SetSync(sync)
-	batch := ratgo.NewWriteBatch()
-	tableName := tableInfo.Name
-	var key string
-	for i := range insertedRowValues {
-		row := insertedRowValues[i]
-		var pk string
-		pkColumn := tableInfo.GetPKColumn()
-		if pkColumn.IsAuto {
-			pk = string(tableInfo.Columns[tableInfo.PKColumn].GetNextIncrementalID())
-		} else if pkColumn.IsUUID {
-
-		} else {
-			// we've already checked that pk in in the row
-			pk = row[pkColumn.Name].String()
-		}
-		for columnName, columnValue := range row {
-			if columnName == pkColumn.Name {
-				// primary key, we just put a fake 0 as its value
-				key = fmt.Sprintf("%s|%s", tableName, pk)
-				batch.Put(key, []byte{'0'})
-			} else {
-				key = fmt.Sprintf("%s|%s|%s", tableName, columnName, pk)
-				batch.Put(key, columnValue)
-			}
-		}
-	}
-	err = engine.db.Write(wo, batch)
+func (engine *RocksDbEngine) Init() error {
+	db, err := ratgo.Open(engine.config.DbName, engine.dbOptions)
 	if err != nil {
-		log.Error("Rocksdb Insert error, %v", err.Error())
-		return nil, err
+		log.Critical("Open Rocksdb Error")
+		return ErrDbInitError
 	}
-	qr = new(proto.QueryResult)
-	qr.RowsAffected = len(insertedValue)
-	return qr, nil
+	log.Info("Init Engine %v complete", engine.Name())
+	engine.DB = db
+	return nil
 }
 
-func (engine *rocksDbEngine) Delete(tableInfo *schema.Table, primaryKeys []string, sync bool) (qr *proto.QueryResult, err error) {
-	wo := ratgo.NewWriteOptions()
-	defer wo.Close()
-	wo.SetSync(sync)
-	batch := ratgo.NewWriteBatch()
-	defer batch.Close()
-
-	tableName := tableInfo.Name
-	var key string
-	for _, pk := range primaryKeys {
-		for _, column := range tableInfo.Columns {
-			if column == tableInfo.GetPKColumn() {
-				key = fmt.Sprintf("%s|%s", tableName, pk)
-				batch.Delete(key)
-			} else {
-				key = fmt.Sprintf("%s|%s|%s", tableName, column.Name, pk)
-				batch.Delete(key)
-			}
-		}
-	}
-	err = engine.db.Write(wo, batch)
-	if err != nil {
-		log.Error("Rocksdb Delete error, %v", err.Error())
-		return nil, err
-	}
-	qr = new(proto.QueryResult)
-	qr.RowsAffected = len(insertedValue)
-	return qr, nil
+func (engine *RocksDbEngine) Name() string {
+	return "rocksdb"
 }
 
-func (engine *rocksDbEngine) Update(tableInfo *schema.Table, primaryKeys []string, updateValues map[string]sqltypes.Value, sync bool) (qr *proto.QueryResult, err error) {
+func (engine *RocksDbEngine) Close() {
+	engine.DB.Close()
+}
+
+func (engine *RocksDbEngine) Destroy() error {
+	return ratgo.DestroyDatabase(engine.config.DbName, engine.dbOptions)
+}
+
+func (engine *RocksDbEngine) Get(options *proto.DbReadOptions, key []byte) ([]byte, error) {
+	ro := ratgo.NewReadOptions()
+	defer ro.Close()
+	if options != nil {
+		ro.SetFillCache(options.FillCache)
+		ro.SetVerifyChecksums(options.VerifyChecksum)
+		if options.Snapshot != nil {
+			rocksdbSnapshot := options.Snapshot.Snapshot.(*ratgo.Snapshot)
+			ro.SetSnapshot(rocksdbSnapshot)
+		}
+	}
+	return engine.DB.Get(ro, key)
+}
+
+func (engine *RocksDbEngine) Gets(options *proto.DbReadOptions, keys [][]byte) ([][]byte, error) {
+	ro := ratgo.NewReadOptions()
+	defer ro.Close()
+	if options != nil {
+		ro.SetFillCache(options.FillCache)
+		ro.SetVerifyChecksums(options.VerifyChecksum)
+		if options.Snapshot != nil {
+			rocksdbSnapshot := options.Snapshot.Snapshot.(*ratgo.Snapshot)
+			ro.SetSnapshot(rocksdbSnapshot)
+		}
+	}
+	results, errors := engine.DB.MultiGet(ro, keys)
+	for _, err := range errors {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
+}
+
+func (engine *RocksDbEngine) Put(options *proto.DbWriteOptions, key []byte, value []byte) error {
 	wo := ratgo.NewWriteOptions()
 	defer wo.Close()
-	wo.SetSync(sync)
+	if options != nil {
+		wo.SetSync(options.Sync)
+		wo.SetDisableWAL(options.DisableWAL)
+	}
+	return engine.DB.Put(wo, key, value)
+}
 
+func (engine *RocksDbEngine) Puts(options *proto.DbWriteOptions, keys [][]byte, values [][]byte) error {
+	wo := ratgo.NewWriteOptions()
+	defer wo.Close()
+	if options != nil {
+		wo.SetSync(options.Sync)
+		wo.SetDisableWAL(options.DisableWAL)
+	}
 	batch := ratgo.NewWriteBatch()
 	defer batch.Close()
-
-	tableName := tableInfo.Name
-	var key string
-	for _, pk := range primaryKeys {
-		for columnName, value := range updateValues {
-			key = fmt.Sprintf("%s|%s|%s", tableName, columnName, pk)
-			batch.Put(key, value)
-		}
+	for i, key := range keys {
+		batch.Put(key, values[i])
 	}
-	err = engine.db.Write(wo, batch)
-	if err != nil {
-		log.Error("Rocksdb Update error, %v", err.Error())
-	}
-	qr = new(proto.QueryResult)
-	qr.RowsAffected = len(primaryKeys)
-	return qr, nil
+	return engine.DB.Write(wo, batch)
 }
 
-func (engine *rocksDbEngine) Select(tableInfo *schema.Table, primaryKeys []string, fields []string, ro *ratgo.ReadOptions) (qr *proto.QueryResult, err error) {
-	tableName := tableInfo.Name
-	// gather keys
-	keys := make([]string, len(primaryKeys)*len(fields))
-	for i, pk := range primaryKeys {
-		for j, field := range fields {
-			keys[i*len[primaryKeys]+j] = fmt.Sprintf("%s|%s|%s", tableName, field, pk)
-		}
-	}
-
-	results, errors := engine.db.MultiGet(ro, keys)
-
-	// if any errors occured, give up this result
-	qr = new(proto.QueryResult)
-	qr.RowsAffected = len(primaryKeys)
-	qr.Rows = make([][]sqltypes.Value, len(primaryKeys))
-	// gather results
-	for i := range primaryKeys {
-		row := qr.Rows[i]
-		row = make([]sqltypes.Value, len(fields))
-		for j, field := range fields {
-			idx := i*len(fields) + j
-			if errors[idx] != nil {
-				return nil, err
-			}
-			result := results[idx]
-			column := tableInfo.Columns[tableInfo.FindColumn(field)]
-			// check if default value is set
-			if result == nil {
-				row[j] = column.Default
-			} else {
-				row[j] = BuildValue(result, column.Type)
-			}
-		}
-	}
-
-	qr.Fields = make(qr.Fields, len(fields))
-	for i, field := range fields {
-		columnIdx := tableInfo.FindColumn(field)
-		if columnIdx == -1 {
-			return nil, fmt.Errorf("Field %s doesn't exist in the Table:%s", field, tableName)
-		}
-		qr.Fields[i] = proto.Field{Name: field, Type: tableInfo.Columns[columnIdx].Type}
-	}
-	return qr, nil
+func (engine *RocksDbEngine) Set(options *proto.DbWriteOptions, key []byte, value []byte) error {
+	return engine.Put(options, key, value)
 }
 
-func (engine *rocksDbEngine) SelectSub(tableInfo *schema.Table, selectValue []proto.FieldValue, ro *ratgo.ReadOptions) (primaryKeys []string, err error) {
-
+func (engine *RocksDbEngine) Sets(options *proto.DbWriteOptions, keys [][]byte, values [][]byte) error {
+	return engine.Puts(options, keys, values)
 }
 
-func BuildValue(bytes []byte, filedType uint32) sqltypes.Value {
-	switch filedType {
-	case schema.TYPE_FRACTIONAL:
-		return sqltypes.MakeFractional(bytes)
-	case schema.TYPE_NUMERIC:
-		return sqltypes.MakeNumeric(bytes)
-	case schema.TYPE_OTHER:
-		return sqltypes.MakeString(bytes)
+func (engine *RocksDbEngine) Delete(options *proto.DbWriteOptions, key []byte) error {
+	wo := ratgo.NewWriteOptions()
+	defer wo.Close()
+	if options != nil {
+		wo.SetSync(options.Sync)
+		wo.SetDisableWAL(options.DisableWAL)
 	}
+	return engine.DB.Delete(wo, key)
+}
+
+func (engine *RocksDbEngine) Deletes(options *proto.DbWriteOptions, keys [][]byte) error {
+	wo := ratgo.NewWriteOptions()
+	defer wo.Close()
+	if options != nil {
+		wo.SetSync(options.Sync)
+		wo.SetDisableWAL(options.DisableWAL)
+	}
+	batch := ratgo.NewWriteBatch()
+	defer batch.Close()
+	for _, key := range keys {
+		batch.Delete(key)
+	}
+	return engine.DB.Write(wo, batch)
+}
+
+// TODO
+type RocksDbCursor struct {
+	start    []byte
+	end      []byte
+	iter     *ratgo.Iterator
+	isClosed bool
+}
+
+func (engine *RocksDbEngine) Iterate(options *proto.DbReadOptions, start []byte, end []byte) (proto.DbCursor, error) {
+	ro := ratgo.NewReadOptions()
+	ro.SetFillCache(options.FillCache)
+	ro.SetVerifyChecksums(options.VerifyChecksum)
+	defer ro.Close()
+	cursor := new(RocksDbCursor)
+	cursor.start = start
+	cursor.end = end
+	cursor.iter = engine.DB.NewIterator(ro)
+	cursor.isClosed = false
+	if start != nil {
+		cursor.iter.Seek(start)
+	}
+	return cursor, nil
+}
+
+func (cursor *RocksDbCursor) Next() {
+	if !cursor.isClosed {
+		cursor.iter.Next()
+	}
+}
+
+func (cursor *RocksDbCursor) Prev() {
+	cursor.iter.Prev()
+}
+
+func (cursor *RocksDbCursor) Valid() bool {
+	if cursor.end != nil {
+		return cursor.iter.Valid() && bytes.Compare(cursor.iter.Key(), cursor.end) <= 0
+	}
+	return cursor.iter.Valid()
+}
+
+func (cursor *RocksDbCursor) Close() {
+	cursor.iter.Close()
+	cursor.isClosed = true
+}
+
+func (cursor *RocksDbCursor) Key() []byte {
+	if !cursor.isClosed && cursor.iter.Valid() {
+		return cursor.iter.Key()
+	}
+	return nil
+}
+
+func (cursor *RocksDbCursor) Value() []byte {
+	if !cursor.isClosed && cursor.iter.Valid() {
+		return cursor.iter.Value()
+	}
+	return nil
+}
+
+func (engine *RocksDbEngine) Snapshot() (*proto.DbSnapshot, error) {
+	snap := &proto.DbSnapshot{Snapshot: engine.DB.NewSnapshot()}
+	return snap, nil
+}
+
+func (engine *RocksDbEngine) ReleaseSnapshot(snap *proto.DbSnapshot) error {
+	rocksSnap := snap.Snapshot.(*ratgo.Snapshot)
+	engine.DB.ReleaseSnapshot(rocksSnap)
+	return nil
+}
+
+func init() {
+	Register("rocksdb", NewRocksDbEngine)
 }

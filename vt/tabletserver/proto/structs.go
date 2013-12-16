@@ -5,7 +5,7 @@
 package proto
 
 import (
-	mproto "github.com/senarukana/rationaldb/mysql/proto"
+	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
 type SessionParams struct {
@@ -38,7 +38,7 @@ type QueryList struct {
 }
 
 type QueryResultList struct {
-	List []mproto.QueryResult
+	List []eproto.QueryResult
 }
 
 type Session struct {

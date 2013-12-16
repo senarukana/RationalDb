@@ -17,15 +17,9 @@ import (
 
 type TableInfo struct {
 	*schema.Table
-	Cache *RowCache
-	// stats updated by sqlquery.go
-	hits, absent, misses, invalidations sync2.AtomicInt64
 }
 
 func NewTableInfo(conn PoolConnection, tableName string, tableType string, createTime sqltypes.Value, comment string, cachePool *CachePool) (ti *TableInfo) {
-	if tableName == "dual" {
-		return &TableInfo{Table: schema.NewTable(tableName)}
-	}
 	ti = loadTableInfo(conn, tableName)
 	ti.initRowCache(conn, tableType, createTime, comment, cachePool)
 	return ti
@@ -43,6 +37,7 @@ func loadTableInfo(conn PoolConnection, tableName string) (ti *TableInfo) {
 }
 
 func (ti *TableInfo) fetchColumns(conn PoolConnection) bool {
+
 	columns, err := conn.ExecuteFetch(fmt.Sprintf("describe %s", ti.Name), 10000, false)
 	if err != nil {
 		log.Warn("%s", err.Error())
