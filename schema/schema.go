@@ -4,8 +4,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/senarukana/rationaldb/jscfg"
 	"github.com/senarukana/rationaldb/sqltypes"
+	"github.com/senarukana/rationaldb/util/jscfg"
 )
 
 // Column categories
@@ -32,7 +32,7 @@ type Table struct {
 	Name      string
 	Columns   []TableColumn
 	Indexes   []*Index
-	PKColumn  int
+	PKColumns []int
 	CacheType int
 }
 
@@ -54,6 +54,7 @@ type TableColumn struct {
 	Type          int
 	Nullable      bool
 	Default       sqltypes.Value
+	IsPk          bool
 	IsAuto        bool
 	IncrementalID uint64
 	Mutex         *sync.Mutex
@@ -69,10 +70,6 @@ func (self *TableColumn) GetNextIncrementalID() (ret uint64) {
 	self.IncrementalID++
 	self.Mutex.Unlock()
 	return
-}
-
-func (self *Table) GetPKColumn() *TableColumn {
-	return &self.Columns[self.PKColumn]
 }
 
 func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Value, extra string) {
@@ -112,9 +109,9 @@ func (ta *Table) FindColumn(name string) int {
 	return -1
 }
 
-/*func (ta *Table) GetPKColumn(index int) *TableColumn {
+func (ta *Table) GetPKColumn(index int) *TableColumn {
 	return &ta.Columns[ta.PKColumns[index]]
-}*/
+}
 
 type Index struct {
 	Name        string

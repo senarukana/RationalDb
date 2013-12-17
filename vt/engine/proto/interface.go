@@ -46,10 +46,12 @@ type DbEngine interface {
 
 	Get(options *DbReadOptions, key []byte) ([]byte, error)
 	Gets(options *DbReadOptions, key [][]byte) ([][]byte, error)
-	Put(options *DbWriteOptions, key []byte, value []byte) error
-	Puts(options *DbWriteOptions, keys [][]byte, values [][]byte) error
-	Set(options *DbWriteOptions, key []byte, value []byte) error
-	Sets(options *DbWriteOptions, key [][]byte, values [][]byte) error
+
+	// Put the data in the engine.
+	// If the key is already existed, It will replace it.
+	Put(options *DbWriteOptions, key, value []byte) error
+	Puts(options *DbWriteOptions, keys, values [][]byte) error
+
 	Delete(options *DbWriteOptions, key []byte) error
 	Deletes(options *DbWriteOptions, key [][]byte) error
 

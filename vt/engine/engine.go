@@ -11,17 +11,7 @@ var (
 	ErrDbInitError = errors.New("InitDb Error")
 )
 
-type DBConfigs struct {
-	ServerId   uint32
-	EngineName string
-	DbName     string
-	DataPath   string
-	BinLogPath string
-
-	*RocksDbConfigs
-}
-
-type engineInitFunc func(conf *DBConfigs) proto.DbEngine
+type engineInitFunc func(conf *proto.DBConfigs) proto.DbEngine
 
 var engineImpls = make(map[string]engineInitFunc)
 
@@ -35,9 +25,9 @@ func Register(name string, engineInit engineInitFunc) {
 	engineImpls[name] = engineInit
 }
 
-func GetEngine(name string, conf *DBConfigs) proto.DbEngine {
-	if engineInit, ok := engineImpls[name]; ok {
-		log.Info("Get Engine : %v", name)
+func GetEngine(conf *proto.DBConfigs) proto.DbEngine {
+	if engineInit, ok := engineImpls[conf.EngineName]; ok {
+		log.Info("Get Engine : %v", conf.EngineName)
 		return engineInit(conf)
 	} else {
 		panic("engine: unknown engine name")

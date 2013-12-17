@@ -6,9 +6,9 @@ package bsonrpc
 
 import (
 	"bytes"
-	"github.com/senarukana/rationaldb/bson"
-	"github.com/senarukana/rationaldb/bytes2"
 	rpc "github.com/senarukana/rationaldb/rpcplus"
+	"github.com/senarukana/rationaldb/util/bson"
+	"github.com/senarukana/rationaldb/util/bytes2"
 )
 
 type RequestBson struct {

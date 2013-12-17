@@ -9,20 +9,20 @@ import (
 	"time"
 
 	"github.com/senarukana/rationaldb/log"
-	mproto "github.com/senarukana/rationaldb/mysql/proto"
 	"github.com/senarukana/rationaldb/sqltypes"
 	"github.com/senarukana/rationaldb/util/hack"
 	"github.com/senarukana/rationaldb/util/stats"
 	"github.com/senarukana/rationaldb/util/sync2"
 	"github.com/senarukana/rationaldb/vt/dbconfigs"
+	"github.com/senarukana/rationaldb/vt/engine"
+	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
 	"github.com/senarukana/rationaldb/vt/schema"
 	"github.com/senarukana/rationaldb/vt/sqlparser"
 	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
 
 const (
-	MAX_RESULT_NAME                = "_vtMaxResultSize"
-	ROWCACHE_INVALIDATION_POSITION = "ROWCACHE_INVALIDATION_POSITION"
+	MAX_RESULT_NAME = "_vtMaxResultSize"
 
 	// SPOT_CHECK_MULTIPLIER determines the precision of the
 	// spot check ratio: 1e6 == 6 digits
@@ -35,8 +35,11 @@ type QueryEngine struct {
 	// Obtain write lock to start/stop query service
 	mu sync.RWMutex
 
-	schemaInfo   *SchemaInfo
-	consolidator *Consolidator
+	dbEngine       eproto.DbEngine
+	connPool       *ConnectionPool
+	streamConnPool *ConnectionPool
+	schemaInfo     *SchemaInfo
+	consolidator   *Consolidator
 
 	spotCheckFreq sync2.AtomicInt64
 
@@ -71,7 +74,8 @@ type CacheInvalidator interface {
 
 func NewQueryEngine(config Config) *QueryEngine {
 	qe := &QueryEngine{}
-	qe.schemaInfo = NewSchemaInfo(config.QueryCacheSize, time.Duration(config.SchemaReloadTime*1e9), time.Duration(config.IdleTimeout*1e9))
+	qe.connPool = NewConnectionPool("ConnPool", config.PoolSize, time.Duration(config.IdleTimeout*1e9))
+	qe.schemaInfo = NewSchemaInfo(config.QueryCacheSize)
 	qe.consolidator = NewConsolidator()
 	qe.spotCheckFreq = sync2.AtomicInt64(config.SpotCheckRatio * SPOT_CHECK_MULTIPLIER)
 	qe.maxResultSize = sync2.AtomicInt64(config.MaxResultSize)
@@ -81,7 +85,6 @@ func NewQueryEngine(config Config) *QueryEngine {
 	queryStats = stats.NewTimings("Queries")
 	QPSRates = stats.NewRates("QPS", queryStats, 15, 60*time.Second)
 	waitStats = stats.NewTimings("Waits")
-	killStats = stats.NewCounters("Kills")
 	errorStats = stats.NewCounters("Errors")
 	resultStats = stats.NewHistogram("Results", resultBuckets)
 	stats.Publish("SpotCheckRatio", stats.FloatFunc(func() float64 {
@@ -91,15 +94,16 @@ func NewQueryEngine(config Config) *QueryEngine {
 	return qe
 }
 
-func (qe *QueryEngine) Open(dbconfig dbconfigs.DBConfig, schemaOverrides []SchemaOverride, qrs *QueryRules) {
+func (qe *QueryEngine) Open(dbconfig *eproto.DBConfigs) {
 	// Wait for Close, in case it's running
 	qe.mu.Lock()
 	defer qe.mu.Unlock()
-
-	connFactory := GenericConnectionCreator(dbconfig.MysqlParams())
+	qe.dbEngine = engine.GetEngine(conf)
+	connFactory := KVEngineConnectionCreator(dbconfig.AppConnectParams, qe.dbEngine)
+	qe.connPool.Open(connFactory)
 
 	start := time.Now().UnixNano()
-	qe.schemaInfo.Open(connFactory, schemaOverrides, qe.cachePool, qrs)
+	qe.schemaInfo.Open(connFactory)
 	log.Info("Time taken to load the schema: %v ms", (time.Now().UnixNano()-start)/1e6)
 }
 
@@ -113,55 +117,15 @@ func (qe *QueryEngine) Close() {
 }
 
 func (qe *QueryEngine) Begin(logStats *sqlQueryStats, connectionId int64) (transactionId int64) {
-	qe.mu.RLock()
-	defer qe.mu.RUnlock()
-
-	var conn PoolConnection
-	if connectionId != 0 {
-		conn = qe.reservedPool.Get(connectionId)
-	} else if conn = qe.txPool.TryGet(); conn == nil {
-		panic(NewTabletError(TX_POOL_FULL, "Transaction pool connection limit exceeded"))
-	}
-	transactionId, err := qe.activeTxPool.SafeBegin(conn)
-	if err != nil {
-		conn.Recycle()
-		panic(err)
-	}
-	return transactionId
+	return 0
 }
 
 func (qe *QueryEngine) Commit(logStats *sqlQueryStats, transactionId int64) {
-	qe.mu.RLock()
-	defer qe.mu.RUnlock()
 
-	dirtyTables, err := qe.activeTxPool.SafeCommit(transactionId)
-	qe.invalidateRows(logStats, dirtyTables)
-	if err != nil {
-		panic(err)
-	}
-}
-
-func (qe *QueryEngine) invalidateRows(logStats *sqlQueryStats, dirtyTables map[string]DirtyKeys) {
-	for tableName, invalidList := range dirtyTables {
-		tableInfo := qe.schemaInfo.GetTable(tableName)
-		if tableInfo == nil {
-			continue
-		}
-		invalidations := int64(0)
-		for key := range invalidList {
-			tableInfo.Cache.Delete(key)
-			invalidations++
-		}
-		logStats.CacheInvalidations += invalidations
-		tableInfo.invalidations.Add(invalidations)
-	}
 }
 
 func (qe *QueryEngine) Rollback(logStats *sqlQueryStats, transactionId int64) {
-	qe.mu.RLock()
-	defer qe.mu.RUnlock()
 
-	qe.activeTxPool.Rollback(transactionId)
 }
 
 func (qe *QueryEngine) Execute(logStats *sqlQueryStats, query *proto.Query) (reply *mproto.QueryResult) {

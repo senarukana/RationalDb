@@ -7,8 +7,8 @@ package bsonrpc
 import (
 	"testing"
 
-	"github.com/senarukana/rationaldb/bson"
 	rpc "github.com/senarukana/rationaldb/rpcplus"
+	"github.com/senarukana/rationaldb/util/bson"
 )
 
 type reflectRequestBson struct {

@@ -13,24 +13,21 @@ import (
 	"time"
 
 	"github.com/senarukana/rationaldb/log"
-	"github.com/senarukana/rationaldb/mysql"
-	mproto "github.com/senarukana/rationaldb/mysql/proto"
 	rpcproto "github.com/senarukana/rationaldb/rpcwrap/proto"
-	"github.com/senarukana/rationaldb/tb"
 	"github.com/senarukana/rationaldb/util/stats"
 	"github.com/senarukana/rationaldb/util/sync2"
-	"github.com/senarukana/rationaldb/vt/dbconfigs"
+	"github.com/senarukana/rationaldb/util/tb"
+	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
 	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
 
 // exclusive transitions can be executed without a lock
 // NOT_SERVING -> CONNECTING
-// CONNECTING -> ABORT -> NOT_SERVING
-// CONNECTING -> INITIALIZING -> SERVING/NOT_SERVING
+// NOT_SERVING -> ABORT -> NOT_SERVING
+// NOT_SERVING -> INITIALIZING -> SERVING/NOT_SERVING
 // SERVING -> SHUTTING_DOWN -> NOT_SERVING
 const (
 	NOT_SERVING = iota
-	CONNECTING
 	ABORT
 	INITIALIZING
 	SERVING
@@ -39,7 +36,6 @@ const (
 
 var stateName = map[int64]string{
 	NOT_SERVING:   "NOT_SERVING",
-	CONNECTING:    "CONNECTING",
 	ABORT:         "ABORT",
 	INITIALIZING:  "INITIALIZING",
 	SERVING:       "SERVING",
@@ -63,7 +59,7 @@ type SqlQuery struct {
 
 	qe        *QueryEngine
 	sessionId int64
-	dbconfig  dbconfigs.DBConfig
+	dbconfig  *eproto.DBConfig
 }
 
 func NewSqlQuery(config Config) *SqlQuery {
@@ -86,11 +82,11 @@ func (sq *SqlQuery) setState(state int64) {
 	sq.state.Set(state)
 }
 
-func (sq *SqlQuery) allowQueries() {
+func (sq *SqlQuery) allowQueries(dbconfig *eproto.DBConfigs) {
 	sq.statemu.Lock()
 	v := sq.state.Get()
 	switch v {
-	case CONNECTING, ABORT, SERVING:
+	case ABORT, SERVING:
 		sq.statemu.Unlock()
 		log.Info("Ignoring allowQueries request, current state: %v", v)
 		return
@@ -98,19 +94,6 @@ func (sq *SqlQuery) allowQueries() {
 		panic("unreachable")
 	}
 	// state is NOT_SERVING
-	sq.setState(CONNECTING)
-	sq.statemu.Unlock()
-
-	// Try connecting. disallowQueries can change the state to ABORT during this time.
-
-	// Connection successful. Keep statemu locked.
-	sq.statemu.Lock()
-	defer sq.statemu.Unlock()
-	if sq.state.Get() == ABORT {
-		sq.setState(NOT_SERVING)
-		log.Info("allowQueries aborting")
-		return
-	}
 	sq.setState(INITIALIZING)
 
 	defer func() {
@@ -122,7 +105,7 @@ func (sq *SqlQuery) allowQueries() {
 		sq.setState(SERVING)
 	}()
 
-	sq.qe.Open(dbconfig, schemaOverrides, qrs)
+	sq.qe.Open(dbconfig)
 	sq.dbconfig = dbconfig
 	sq.sessionId = Rand()
 	log.Info("Session id: %d", sq.sessionId)
@@ -132,9 +115,6 @@ func (sq *SqlQuery) disallowQueries() {
 	sq.statemu.Lock()
 	defer sq.statemu.Unlock()
 	switch sq.state.Get() {
-	case CONNECTING:
-		sq.setState(ABORT)
-		return
 	case NOT_SERVING, ABORT:
 		return
 	case INITIALIZING, SHUTTING_DOWN:
@@ -149,7 +129,7 @@ func (sq *SqlQuery) disallowQueries() {
 	log.Info("Stopping query service: %d", sq.sessionId)
 	sq.qe.Close()
 	sq.sessionId = 0
-	sq.dbconfig = dbconfigs.DBConfig{}
+	sq.dbconfig = nil
 }
 
 // checkState checks if we can serve queries. If not, it causes an
@@ -159,16 +139,14 @@ func (sq *SqlQuery) disallowQueries() {
 //   SELECT & BEGIN: RETRY errors
 //   DMLs & COMMITS: Allowed
 // NOT_SERVING: RETRY for all.
-func (sq *SqlQuery) checkState(sessionId int64, allowShutdown bool) {
+func (sq *SqlQuery) checkState(sessionId int64) {
 	switch sq.state.Get() {
 	case NOT_SERVING:
 		panic(NewTabletError(RETRY, "not serving"))
 	case CONNECTING, ABORT, INITIALIZING:
 		panic(NewTabletError(RETRY, "initalizing"))
 	case SHUTTING_DOWN:
-		if !allowShutdown {
-			panic(NewTabletError(RETRY, "unavailable"))
-		}
+		panic(NewTabletError(RETRY, "unavailable"))
 	}
 	// state is SERVING
 	if sessionId == 0 || sessionId != sq.sessionId {
@@ -180,72 +158,26 @@ func (sq *SqlQuery) GetSessionId(sessionParams *proto.SessionParams, sessionInfo
 	if sq.state.Get() != SERVING {
 		return NewTabletError(RETRY, "Query server is in %s state", stateName[sq.state.Get()])
 	}
-	if sessionParams.Keyspace != sq.dbconfig.Keyspace {
-		return NewTabletError(FATAL, "Keyspace mismatch, expecting %v, received %v", sq.dbconfig.Keyspace, sessionParams.Keyspace)
-	}
-	if sessionParams.Shard != sq.dbconfig.Shard {
-		return NewTabletError(FATAL, "Shard mismatch, expecting %v, received %v", sq.dbconfig.Shard, sessionParams.Shard)
-	}
+	/*	if sessionParams.Keyspace != sq.dbconfig.Keyspace {
+			return NewTabletError(FATAL, "Keyspace mismatch, expecting %v, received %v", sq.dbconfig.Keyspace, sessionParams.Keyspace)
+		}
+		if sessionParams.Shard != sq.dbconfig.Shard {
+			return NewTabletError(FATAL, "Shard mismatch, expecting %v, received %v", sq.dbconfig.Shard, sessionParams.Shard)
+		}*/
 	sessionInfo.SessionId = sq.sessionId
 	return nil
 }
 
 func (sq *SqlQuery) Begin(context *rpcproto.Context, session *proto.Session, txInfo *proto.TransactionInfo) (err error) {
-	logStats := newSqlQueryStats("Begin", context)
-	logStats.OriginalSql = "begin"
-	defer handleError(&err, logStats)
-	sq.checkState(session.SessionId, false)
-
-	txInfo.TransactionId = sq.qe.Begin(logStats, session.ConnectionId)
 	return nil
 }
 
 func (sq *SqlQuery) Commit(context *rpcproto.Context, session *proto.Session, noOutput *string) (err error) {
-	logStats := newSqlQueryStats("Commit", context)
-	logStats.OriginalSql = "commit"
-	defer handleError(&err, logStats)
-	sq.checkState(session.SessionId, true)
-
-	sq.qe.Commit(logStats, session.TransactionId)
 	return nil
 }
 
 func (sq *SqlQuery) Rollback(context *rpcproto.Context, session *proto.Session, noOutput *string) (err error) {
-	logStats := newSqlQueryStats("Rollback", context)
-	logStats.OriginalSql = "rollback"
-	defer handleError(&err, logStats)
-	sq.checkState(session.SessionId, true)
-
-	sq.qe.Rollback(logStats, session.TransactionId)
 	return nil
-}
-
-func (sq *SqlQuery) CreateReserved(session *proto.Session, connectionInfo *proto.ConnectionInfo) (err error) {
-	defer handleError(&err, nil)
-	sq.checkState(session.SessionId, false)
-	connectionInfo.ConnectionId = sq.qe.CreateReserved()
-	return nil
-}
-
-func (sq *SqlQuery) CloseReserved(session *proto.Session, noOutput *string) (err error) {
-	defer handleError(&err, nil)
-	sq.checkState(session.SessionId, false)
-	sq.qe.CloseReserved(session.ConnectionId)
-	return nil
-}
-
-func (sq *SqlQuery) invalidateForDml(dml *proto.DmlType) {
-	if sq.state.Get() != SERVING {
-		return
-	}
-	sq.qe.InvalidateForDml(dml)
-}
-
-func (sq *SqlQuery) invalidateForDDL(ddlInvalidate *proto.DDLInvalidate) {
-	if sq.state.Get() != SERVING {
-		return
-	}
-	sq.qe.InvalidateForDDL(ddlInvalidate)
 }
 
 func handleExecError(query *proto.Query, err *error, logStats *sqlQueryStats) {
@@ -274,9 +206,7 @@ func (sq *SqlQuery) Execute(context *rpcproto.Context, query *proto.Query, reply
 	logStats := newSqlQueryStats("Execute", context)
 	defer handleExecError(query, &err, logStats)
 
-	// allow shutdown state if we're in a transaction
-	allowShutdown := (query.TransactionId != 0)
-	sq.checkState(query.SessionId, allowShutdown)
+	sq.checkState(query.SessionId)
 
 	*reply = *sq.qe.Execute(logStats, query)
 	return nil
@@ -296,7 +226,7 @@ func (sq *SqlQuery) StreamExecute(context *rpcproto.Context, query *proto.Query,
 		return NewTabletError(FAIL, "Persistent connections not supported with streaming")
 	}
 
-	sq.checkState(query.SessionId, false)
+	sq.checkState(query.SessionId)
 
 	sq.qe.StreamExecute(logStats, query, func(reply interface{}) error {
 		if sq.state.Get() != SERVING {
@@ -307,7 +237,7 @@ func (sq *SqlQuery) StreamExecute(context *rpcproto.Context, query *proto.Query,
 	return nil
 }
 
-func (sq *SqlQuery) ExecuteBatch(context *rpcproto.Context, queryList *proto.QueryList, reply *proto.QueryResultList) (err error) {
+/*func (sq *SqlQuery) ExecuteBatch(context *rpcproto.Context, queryList *proto.QueryList, reply *proto.QueryResultList) (err error) {
 	defer handleError(&err, nil)
 	if len(queryList.Queries) == 0 {
 		panic(NewTabletError(FAIL, "Empty query list"))
@@ -368,23 +298,15 @@ func (sq *SqlQuery) ExecuteBatch(context *rpcproto.Context, queryList *proto.Que
 		panic(NewTabletError(FAIL, "begin called with no commit"))
 	}
 	return nil
-}
+}*/
 
 func (sq *SqlQuery) statsJSON() string {
 	buf := bytes.NewBuffer(make([]byte, 0, 128))
 	fmt.Fprintf(buf, "{")
 	fmt.Fprintf(buf, "\n \"State\": \"%v\",", stateName[sq.state.Get()])
-	fmt.Fprintf(buf, "\n \"CachePool\": %v,", sq.qe.cachePool.StatsJSON())
 	fmt.Fprintf(buf, "\n \"QueryCache\": %v,", sq.qe.schemaInfo.queries.StatsJSON())
-	fmt.Fprintf(buf, "\n \"SchemaReloadTime\": %v,", int64(sq.qe.schemaInfo.reloadTime))
-	fmt.Fprintf(buf, "\n \"ConnPool\": %v,", sq.qe.connPool.StatsJSON())
-	fmt.Fprintf(buf, "\n \"StreamConnPool\": %v,", sq.qe.streamConnPool.StatsJSON())
-	fmt.Fprintf(buf, "\n \"TxPool\": %v,", sq.qe.txPool.StatsJSON())
-	fmt.Fprintf(buf, "\n \"ActiveTxPool\": %v,", sq.qe.activeTxPool.StatsJSON())
-	fmt.Fprintf(buf, "\n \"ActivePool\": %v,", sq.qe.activePool.StatsJSON())
 	fmt.Fprintf(buf, "\n \"MaxResultSize\": %v,", sq.qe.maxResultSize.Get())
 	fmt.Fprintf(buf, "\n \"StreamBufferSize\": %v,", sq.qe.streamBufferSize.Get())
-	fmt.Fprintf(buf, "\n \"ReservedPool\": %v", sq.qe.reservedPool.StatsJSON())
 	fmt.Fprintf(buf, "\n}")
 	return buf.String()
 }

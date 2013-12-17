@@ -7,7 +7,7 @@ package proto
 import (
 	"testing"
 
-	"github.com/senarukana/rationaldb/bson"
+	"github.com/senarukana/rationaldb/util/bson"
 )
 
 type reflectQuery struct {

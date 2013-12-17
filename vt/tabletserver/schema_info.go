@@ -14,11 +14,12 @@ import (
 
 	"github.com/senarukana/rationaldb/cache"
 	"github.com/senarukana/rationaldb/log"
-	mproto "github.com/senarukana/rationaldb/mysql/proto"
 	"github.com/senarukana/rationaldb/sqltypes"
 	"github.com/senarukana/rationaldb/util/stats"
+	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
 	"github.com/senarukana/rationaldb/vt/schema"
 	"github.com/senarukana/rationaldb/vt/sqlparser"
+	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
 
 const maxTableCount = 10000
@@ -26,7 +27,7 @@ const maxTableCount = 10000
 type ExecPlan struct {
 	*sqlparser.ExecPlan
 	TableInfo *TableInfo
-	Fields    []mproto.Field
+	Fields    []eproto.Field
 	Rules     *QueryRules
 
 	mu         sync.Mutex
@@ -72,22 +73,17 @@ type SchemaOverride struct {
 type SchemaInfo struct {
 	mu             sync.Mutex
 	tables         map[string]*TableInfo
-	executor       *DbExecutor
+	connPool       *ConnectionPool
 	queryCacheSize int
 	queries        *cache.LRUCache
 	rules          *QueryRules
-	reloadTime     time.Duration
-	lastChange     time.Time
-	ticks          *timer.Timer
 }
 
-func NewSchemaInfo(queryCacheSize int, reloadTime time.Duration, idleTimeout time.Duration) *SchemaInfo {
+func NewSchemaInfo(queryCacheSize int, idleTimeout time.Duration) *SchemaInfo {
 	si := &SchemaInfo{
 		queryCacheSize: queryCacheSize,
 		queries:        cache.NewLRUCache(int64(queryCacheSize)),
-		rules:          NewQueryRules(),
-		reloadTime:     reloadTime,
-		ticks:          timer.NewTimer(reloadTime),
+		connPool:       NewConnectionPool("Schema", 2, idleTimeout),
 	}
 	stats.Publish("QueryCacheLength", stats.IntFunc(si.queries.Length))
 	stats.Publish("QueryCacheSize", stats.IntFunc(si.queries.Size))
@@ -105,8 +101,11 @@ func NewSchemaInfo(queryCacheSize int, reloadTime time.Duration, idleTimeout tim
 	return si
 }
 
-func (si *SchemaInfo) Open(executor *DbExecutor, qrs *QueryRules) {
-	tables, err := si.executor.ShowTables()
+func (si *SchemaInfo) Open(connFactory proto.CreateKVEngineConnectionFunc) {
+	si.connPool.Open(connFactory)
+	conn := si.connPool.Get()
+	defer conn.Recycle()
+	tables, err := conn.ShowTables()
 	if err != nil {
 		panic(NewTabletError(FATAL, "Could not get table list: %v", err))
 	}
@@ -117,16 +116,13 @@ func (si *SchemaInfo) Open(executor *DbExecutor, qrs *QueryRules) {
 	}
 	// Clear is not really needed. Doing it for good measure.
 	si.queries.Clear()
-	si.rules = qrs.Copy()
 	// si.ticks.Start(func() { si.Reload() })
 }
 
 func (si *SchemaInfo) Close() {
-	si.ticks.Stop()
-	si.connPool.Close()
 	si.tables = nil
+	si.connPool.Close()
 	si.queries.Clear()
-	si.rules = NewQueryRules()
 }
 
 func (si *SchemaInfo) DropTable(tableName string) {
@@ -157,15 +153,14 @@ func (si *SchemaInfo) GetPlan(logStats *sqlQueryStats, sql string) (plan *ExecPl
 		panic(NewTabletError(FAIL, "%s", err))
 	}
 	plan = &ExecPlan{ExecPlan: splan, TableInfo: tableInfo}
-	plan.Rules = si.rules.filterByPlan(sql, plan.PlanId)
+	// plan.Rules = si.rules.filterByPlan(sql, plan.PlanId)
 	if plan.PlanId.IsSelect() {
 		if plan.FieldQuery == nil {
 			log.Warn("Cannot cache field info: %s", sql)
 		} else {
-			conn := si.connPool.Get()
-			defer conn.Recycle()
 			sql := plan.FieldQuery.Query
-			r, err := conn.ExecuteFetch(sql, 1, true)
+			//TODO
+			// r, err := si.executor(sql, 1, true)
 			logStats.QuerySources |= QUERY_SOURCE_MYSQL
 			logStats.NumberOfQueries += 1
 			logStats.AddRewrittenSql(sql)
@@ -191,7 +186,7 @@ func (si *SchemaInfo) GetStreamPlan(sql string) *sqlparser.ParsedQuery {
 	return fullQuery
 }
 
-func (si *SchemaInfo) SetRules(qrs *QueryRules) {
+/*func (si *SchemaInfo) SetRules(qrs *QueryRules) {
 	si.mu.Lock()
 	defer si.mu.Unlock()
 	si.rules = qrs.Copy()
@@ -202,7 +197,7 @@ func (si *SchemaInfo) GetRules() (qrs *QueryRules) {
 	si.mu.Lock()
 	defer si.mu.Unlock()
 	return si.rules.Copy()
-}
+}*/
 
 func (si *SchemaInfo) GetTable(tableName string) *TableInfo {
 	si.mu.Lock()

@@ -9,7 +9,7 @@ import (
 
 	"github.com/senarukana/rationaldb/log"
 	"github.com/senarukana/rationaldb/mysql"
-	"github.com/senarukana/rationaldb/tb"
+	"github.com/senarukana/rationaldb/util/tb"
 )
 
 const (

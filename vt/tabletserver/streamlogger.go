@@ -14,36 +14,29 @@ import (
 	"github.com/senarukana/rationaldb/log"
 	"github.com/senarukana/rationaldb/rpcwrap/proto"
 	"github.com/senarukana/rationaldb/sqltypes"
-	"github.com/senarukana/rationaldb/streamlog"
+	"github.com/senarukana/rationaldb/util/streamlog"
 )
 
 var SqlQueryLogger = streamlog.New("SqlQuery", 50)
 
 const (
-	QUERY_SOURCE_ROWCACHE = 1 << iota
+	QUERY_SOURCE_DBENGINE = 1 << iota
 	QUERY_SOURCE_CONSOLIDATOR
-	QUERY_SOURCE_MYSQL
 )
 
 type sqlQueryStats struct {
-	Method               string
-	PlanType             string
-	OriginalSql          string
-	BindVariables        map[string]interface{}
-	rewrittenSqls        []string
-	RowsAffected         int
-	NumberOfQueries      int
-	StartTime            time.Time
-	EndTime              time.Time
-	MysqlResponseTime    time.Duration
-	WaitingForConnection time.Duration
-	CacheHits            int64
-	CacheAbsent          int64
-	CacheMisses          int64
-	CacheInvalidations   int64
-	QuerySources         byte
-	Rows                 [][]sqltypes.Value
-	context              *proto.Context
+	Method          string
+	PlanType        string
+	OriginalSql     string
+	BindVariables   map[string]interface{}
+	rewrittenSqls   []string
+	RowsAffected    int
+	NumberOfQueries int
+	StartTime       time.Time
+	EndTime         time.Time
+	QuerySources    byte
+	Rows            [][]sqltypes.Value
+	context         *proto.Context
 }
 
 func newSqlQueryStats(methodName string, context *proto.Context) *sqlQueryStats {
@@ -123,14 +116,10 @@ func (stats *sqlQueryStats) FmtQuerySources() string {
 	if stats.QuerySources == 0 {
 		return "none"
 	}
-	sources := make([]string, 3)
+	sources := make([]string, 2)
 	n := 0
 	if stats.QuerySources&QUERY_SOURCE_MYSQL != 0 {
-		sources[n] = "mysql"
-		n++
-	}
-	if stats.QuerySources&QUERY_SOURCE_ROWCACHE != 0 {
-		sources[n] = "rowcache"
+		sources[n] = "engine"
 		n++
 	}
 	if stats.QuerySources&QUERY_SOURCE_CONSOLIDATOR != 0 {
@@ -152,7 +141,7 @@ func (log *sqlQueryStats) Username() string {
 func (log *sqlQueryStats) Format(params url.Values) string {
 	_, fullBindParams := params["full"]
 	return fmt.Sprintf(
-		"%v\t%v\t%v\t%v\t%v\t%v\t%v\t%q\t%v\t%v\t%q\t%v\t%v\t%v\t%v\t%v\t%v\t%v\t%v\t\n",
+		"%v\t%v\t%v\t%v\t%v\t%v\t%v\t%q\t%v\t%v\t%q\t%v\t%v\t%v\t\n",
 		log.Method,
 		log.RemoteAddr(),
 		log.Username(),
@@ -165,11 +154,5 @@ func (log *sqlQueryStats) Format(params url.Values) string {
 		log.NumberOfQueries,
 		log.RewrittenSql(),
 		log.FmtQuerySources(),
-		log.MysqlResponseTime.Seconds(),
-		log.WaitingForConnection.Seconds(),
-		log.SizeOfResponse(),
-		log.CacheHits,
-		log.CacheMisses,
-		log.CacheAbsent,
-		log.CacheInvalidations)
+		log.SizeOfResponse())
 }

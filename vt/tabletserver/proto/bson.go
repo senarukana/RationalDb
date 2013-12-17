@@ -10,9 +10,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/senarukana/rationaldb/bson"
-	"github.com/senarukana/rationaldb/bytes2"
-	mproto "github.com/senarukana/rationaldb/mysql/proto"
+	"github.com/senarukana/rationaldb/util/bson"
+	"github.com/senarukana/rationaldb/util/bytes2"
+	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
 func (query *Query) MarshalBson(buf *bytes2.ChunkedWriter) {
@@ -267,7 +267,7 @@ func (qrl *QueryResultList) MarshalBson(buf *bytes2.ChunkedWriter) {
 	lenWriter.RecordLen()
 }
 
-func EncodeResultsBson(results []mproto.QueryResult, key string, buf *bytes2.ChunkedWriter) {
+func EncodeResultsBson(results []eproto.QueryResult, key string, buf *bytes2.ChunkedWriter) {
 	bson.EncodePrefix(buf, bson.Array, key)
 	lenWriter := bson.NewLenWriter(buf)
 	for i, v := range results {
@@ -294,7 +294,7 @@ func (qrl *QueryResultList) UnmarshalBson(buf *bytes.Buffer) {
 	}
 }
 
-func DecodeResultsBson(buf *bytes.Buffer, kind byte) (results []mproto.QueryResult) {
+func DecodeResultsBson(buf *bytes.Buffer, kind byte) (results []eproto.QueryResult) {
 	switch kind {
 	case bson.Array:
 		// valid
@@ -305,9 +305,9 @@ func DecodeResultsBson(buf *bytes.Buffer, kind byte) (results []mproto.QueryResu
 	}
 
 	bson.Next(buf, 4)
-	results = make([]mproto.QueryResult, 0, 8)
+	results = make([]eproto.QueryResult, 0, 8)
 	kind = bson.NextByte(buf)
-	var result mproto.QueryResult
+	var result eproto.QueryResult
 	for i := 0; kind != bson.EOO; i++ {
 		bson.ExpectIndex(buf, i)
 		result.UnmarshalBson(buf)

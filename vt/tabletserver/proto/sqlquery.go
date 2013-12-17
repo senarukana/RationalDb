@@ -5,9 +5,9 @@
 package proto
 
 import (
-	mproto "github.com/senarukana/rationaldb/mysql/proto"
 	"github.com/senarukana/rationaldb/rpcwrap"
 	rpcproto "github.com/senarukana/rationaldb/rpcwrap/proto"
+	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
 // defines the RPC services
@@ -22,9 +22,9 @@ type SqlQuery interface {
 	Commit(context *rpcproto.Context, session *Session, noOutput *string) error
 	Rollback(context *rpcproto.Context, session *Session, noOutput *string) error
 
-	Execute(context *rpcproto.Context, query *Query, reply *mproto.QueryResult) error
+	Execute(context *rpcproto.Context, query *Query, reply *eproto.QueryResult) error
 	StreamExecute(context *rpcproto.Context, query *Query, sendReply func(reply interface{}) error) error
-	ExecuteBatch(context *rpcproto.Context, queryList *QueryList, reply *QueryResultList) error
+	// ExecuteBatch(context *rpcproto.Context, queryList *QueryList, reply *QueryResultList) error
 }
 
 // helper method to register the server (does interface checking)

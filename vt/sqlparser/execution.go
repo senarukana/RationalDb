@@ -9,8 +9,8 @@ import (
 	"strconv"
 
 	"github.com/senarukana/rationaldb/log"
+	"github.com/senarukana/rationaldb/schema"
 	"github.com/senarukana/rationaldb/sqltypes"
-	"github.com/senarukana/rationaldb/vt/schema"
 )
 
 type PlanType int

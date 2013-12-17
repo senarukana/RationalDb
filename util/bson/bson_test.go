@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/senarukana/rationaldb/bytes2"
+	"github.com/senarukana/rationaldb/util/bytes2"
 )
 
 func TestVariety(t *testing.T) {

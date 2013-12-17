@@ -8,10 +8,6 @@ import (
 	"github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
-type ErrKeyNotExists string
-
-func (self *ErrKeyNotExists) Error() string { return "Key : " + string(self) + " not exists" }
-
 /*type RocksDbError struct {
 	Message string
 	Query   string
@@ -39,27 +35,20 @@ func handleError(err *error) {
 	}
 }*/
 
-type RocksDbConfigs struct {
-	CreateIfMissing   bool
-	ParanoidCheck     bool
-	LRUCacheSize      int
-	BloomFilterLength int
-}
-
 type RocksDbEngine struct {
-	config    *DBConfigs
+	config    *proto.DBConfigs
 	dbOptions *ratgo.Options
 	*ratgo.DB
 }
 
-var DefaultRocksDbConf = &RocksDbConfigs{
+var DefaultRocksDbConf = &proto.RocksDbConfigs{
 	CreateIfMissing:   true,
 	ParanoidCheck:     false,
 	LRUCacheSize:      2 >> 10,
 	BloomFilterLength: 0,
 }
 
-func NewRocksDbEngine(config *DBConfigs) proto.DbEngine {
+func NewRocksDbEngine(config *proto.DBConfigs) proto.DbEngine {
 	if config == nil {
 		panic("Not provide engine config")
 	}
@@ -82,7 +71,7 @@ func NewRocksDbEngine(config *DBConfigs) proto.DbEngine {
 }
 
 func (engine *RocksDbEngine) Init() error {
-	db, err := ratgo.Open(engine.config.DbName, engine.dbOptions)
+	db, err := ratgo.Open(engine.config.DataPath, engine.dbOptions)
 	if err != nil {
 		log.Critical("Open Rocksdb Error")
 		return ErrDbInitError
@@ -101,7 +90,7 @@ func (engine *RocksDbEngine) Close() {
 }
 
 func (engine *RocksDbEngine) Destroy() error {
-	return ratgo.DestroyDatabase(engine.config.DbName, engine.dbOptions)
+	return ratgo.DestroyDatabase(engine.config.DataPath, engine.dbOptions)
 }
 
 func (engine *RocksDbEngine) Get(options *proto.DbReadOptions, key []byte) ([]byte, error) {
@@ -132,6 +121,7 @@ func (engine *RocksDbEngine) Gets(options *proto.DbReadOptions, keys [][]byte) (
 	results, errors := engine.DB.MultiGet(ro, keys)
 	for _, err := range errors {
 		if err != nil {
+			log.Error("Get Key:%v error, error", err)
 			return nil, err
 		}
 	}
@@ -149,53 +139,6 @@ func (engine *RocksDbEngine) Put(options *proto.DbWriteOptions, key []byte, valu
 }
 
 func (engine *RocksDbEngine) Puts(options *proto.DbWriteOptions, keys [][]byte, values [][]byte) error {
-	wo := ratgo.NewWriteOptions()
-	defer wo.Close()
-	if options != nil {
-		wo.SetSync(options.Sync)
-		wo.SetDisableWAL(options.DisableWAL)
-	}
-	batch := ratgo.NewWriteBatch()
-	defer batch.Close()
-	for i, key := range keys {
-		batch.Put(key, values[i])
-	}
-	return engine.DB.Write(wo, batch)
-}
-
-func (engine *RocksDbEngine) Set(options *proto.DbWriteOptions, key []byte, value []byte) error {
-	ro := ratgo.NewReadOptions()
-	v, err := engine.DB.Get(ro, key)
-	if err != nil {
-		return err
-	}
-	if v == nil {
-		return ErrKeyNotExists(string(key))
-	}
-	ro.Close()
-
-	wo := ratgo.NewWriteOptions()
-	defer wo.Close()
-	if options != nil {
-		wo.SetSync(options.Sync)
-		wo.SetDisableWAL(options.DisableWAL)
-	}
-	return engine.DB.Put(wo, key, value)
-}
-
-func (engine *RocksDbEngine) Sets(options *proto.DbWriteOptions, keys [][]byte, values [][]byte) error {
-	ro := ratgo.NewReadOptions()
-	vs, errs := engine.DB.MultiGet(ro, keys)
-	for i, v := range vs {
-		if errs[i] != nil {
-			return err
-		}
-		if v == nil {
-			return ErrKeyNotExists(string(key))
-		}
-	}
-	ro.Close()
-
 	wo := ratgo.NewWriteOptions()
 	defer wo.Close()
 	if options != nil {

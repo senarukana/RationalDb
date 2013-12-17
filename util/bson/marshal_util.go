@@ -7,7 +7,7 @@
 package bson
 
 import (
-	"github.com/senarukana/rationaldb/bytes2"
+	"github.com/senarukana/rationaldb/util/bytes2"
 )
 
 func EncodeStringArray(buf *bytes2.ChunkedWriter, name string, values []string) {

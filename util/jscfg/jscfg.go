@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"io/ioutil"
 
-	"github.com/senarukana/rationaldb/ioutil2"
+	"github.com/senarukana/rationaldb/util/ioutil2"
 )
 
 func ToJson(val interface{}) string {
