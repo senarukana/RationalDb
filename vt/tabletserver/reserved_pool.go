@@ -43,7 +43,7 @@ func (rp *ReservedPool) CreateConnection() (connectionId int64) {
 		panic(NewTabletErrorSql(FATAL, err))
 	}
 	connectionId = rp.lastId.Add(1)
-	rconn := &reservedConnection{proto.KVDbExecutorPool: conn, connectionId: connectionId, pool: rp}
+	rconn := &reservedConnection{proto.KVExecutorPoolConnection: conn, connectionId: connectionId, pool: rp}
 	rp.pool.Register(connectionId, rconn)
 	return connectionId
 }
@@ -68,7 +68,7 @@ func (rp *ReservedPool) StatsJSON() string {
 }
 
 type reservedConnection struct {
-	*KVDbExecutorPool
+	*KVExecutorPoolConnection
 	connectionId int64
 	pool         *ReservedPool
 	inUse        bool

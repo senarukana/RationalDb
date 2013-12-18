@@ -140,8 +140,6 @@ func (qe *QueryEngine) Execute(logStats *sqlQueryStats, query *proto.Query) (rep
 	qe.mu.RLock()
 	defer qe.mu.RUnlock()
 
-	conn := qe.connPool.Get()
-
 	if query.BindVariables == nil { // will help us avoid repeated nil checks
 		query.BindVariables = make(map[string]interface{})
 	}
@@ -345,7 +343,7 @@ func (qe *QueryEngine) mustVerify() bool {
 }
 
 // execDirect always sends the query to dbengine
-func (qe *QueryEngine) execDirect(logStats *sqlQueryStats, plan *CompiledPlan, conn proto.KVEngineConnection) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execDirect(logStats *sqlQueryStats, plan *CompiledPlan, conn proto.KVExecutorPoolConnection) (result *eproto.QueryResult) {
 	if plan.Fields != nil {
 		result = qe.directFetch(logStats, conn, plan.FullQuery, plan.BindVars, nil, nil)
 		result.Fields = plan.Fields
@@ -371,12 +369,12 @@ func (qe *QueryEngine) execSelect(logStats *sqlQueryStats, plan *CompiledPlan) (
 	return
 }
 
-func (qe *QueryEngine) execInsertPK(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, plan *CompiledPlan, invalidator CacheInvalidator) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execInsertPK(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, plan *CompiledPlan, invalidator CacheInvalidator) (result *eproto.QueryResult) {
 	pkRows := buildValueList(plan.TableInfo, plan.PKValues, plan.BindVars)
 	return qe.execInsertPKRows(logStats, conn, plan, pkRows, invalidator)
 }
 
-func (qe *QueryEngine) execInsertSubquery(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, plan *CompiledPlan, invalidator CacheInvalidator) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execInsertSubquery(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, plan *CompiledPlan, invalidator CacheInvalidator) (result *eproto.QueryResult) {
 	innerResult := qe.directFetch(logStats, conn, plan.Subquery, plan.BindVars, nil, nil)
 	innerRows := innerResult.Rows
 	if len(innerRows) == 0 {
@@ -395,7 +393,7 @@ func (qe *QueryEngine) execInsertSubquery(logStats *sqlQueryStats, conn proto.KV
 	return qe.execInsertPKRows(logStats, conn, plan, pkRows, invalidator)
 }
 
-func (qe *QueryEngine) execInsertPKRows(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, plan *CompiledPlan, pkRows [][]sqltypes.Value, invalidator CacheInvalidator) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execInsertPKRows(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, plan *CompiledPlan, pkRows [][]sqltypes.Value, invalidator CacheInvalidator) (result *eproto.QueryResult) {
 	secondaryList := buildSecondaryList(plan.TableInfo, pkRows, plan.SecondaryPKValues, plan.BindVars)
 	bsc := buildStreamComment(plan.TableInfo, pkRows, secondaryList)
 	result = qe.directFetch(logStats, conn, plan.OuterQuery, plan.BindVars, nil, bsc)
@@ -410,7 +408,7 @@ func (qe *QueryEngine) execInsertPKRows(logStats *sqlQueryStats, conn proto.KVDb
 	return result
 }
 
-func (qe *QueryEngine) execDMLPK(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, plan *CompiledPlan, invalidator CacheInvalidator) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execDMLPK(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, plan *CompiledPlan, invalidator CacheInvalidator) (result *eproto.QueryResult) {
 	pkRows := buildValueList(plan.TableInfo, plan.PKValues, plan.BindVars)
 	secondaryList := buildSecondaryList(plan.TableInfo, pkRows, plan.SecondaryPKValues, plan.BindVars)
 	bsc := buildStreamComment(plan.TableInfo, pkRows, secondaryList)
@@ -424,13 +422,13 @@ func (qe *QueryEngine) execDMLPK(logStats *sqlQueryStats, conn proto.KVDbExecuto
 	return result
 }
 
-func (qe *QueryEngine) execDMLSubquery(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, plan *CompiledPlan, invalidator CacheInvalidator) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execDMLSubquery(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, plan *CompiledPlan, invalidator CacheInvalidator) (result *eproto.QueryResult) {
 	innerResult := qe.directFetch(logStats, conn, plan.Subquery, plan.BindVars, nil, nil)
 	// no need to validate innerResult
 	return qe.execDMLPKRows(logStats, conn, plan, innerResult.Rows, invalidator)
 }
 
-func (qe *QueryEngine) execDMLPKRows(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, plan *CompiledPlan, pkRows [][]sqltypes.Value, invalidator CacheInvalidator) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execDMLPKRows(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, plan *CompiledPlan, pkRows [][]sqltypes.Value, invalidator CacheInvalidator) (result *eproto.QueryResult) {
 	if len(pkRows) == 0 {
 		return &eproto.QueryResult{RowsAffected: 0}
 	}
@@ -449,7 +447,7 @@ func (qe *QueryEngine) execDMLPKRows(logStats *sqlQueryStats, conn proto.KVDbExe
 	return &eproto.QueryResult{RowsAffected: rowsAffected}
 }
 
-func (qe *QueryEngine) execSet(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, plan *CompiledPlan) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execSet(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, plan *CompiledPlan) (result *eproto.QueryResult) {
 	switch plan.SetKey {
 	case "vt_pool_size":
 		qe.connPool.SetCapacity(int(plan.SetValue.(float64)))
@@ -508,7 +506,7 @@ func (qe *QueryEngine) qFetch(logStats *sqlQueryStats, parsed_query *sqlparser.P
 	return q.Result
 }
 
-func (qe *QueryEngine) directFetch(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, parsed_query *sqlparser.ParsedQuery, bindVars map[string]interface{}, listVars []sqltypes.Value, buildStreamComment []byte) (result *eproto.QueryResult) {
+func (qe *QueryEngine) directFetch(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, parsed_query *sqlparser.ParsedQuery, bindVars map[string]interface{}, listVars []sqltypes.Value, buildStreamComment []byte) (result *eproto.QueryResult) {
 	sql := qe.generateFinalSql(parsed_query, bindVars, listVars, buildStreamComment)
 	result, err := qe.executeSql(logStats, conn, sql, false)
 	if err != nil {
@@ -518,7 +516,7 @@ func (qe *QueryEngine) directFetch(logStats *sqlQueryStats, conn proto.KVDbExecu
 }
 
 // fullFetch also fetches field info
-func (qe *QueryEngine) fullFetch(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, parsed_query *sqlparser.ParsedQuery, bindVars map[string]interface{}, listVars []sqltypes.Value, buildStreamComment []byte) (result *eproto.QueryResult) {
+func (qe *QueryEngine) fullFetch(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, parsed_query *sqlparser.ParsedQuery, bindVars map[string]interface{}, listVars []sqltypes.Value, buildStreamComment []byte) (result *eproto.QueryResult) {
 	sql := qe.generateFinalSql(parsed_query, bindVars, listVars, buildStreamComment)
 	result, err := qe.executeSql(logStats, conn, sql, true)
 	if err != nil {
@@ -541,7 +539,7 @@ func (qe *QueryEngine) generateFinalSql(parsed_query *sqlparser.ParsedQuery, bin
 	return hack.String(sql)
 }
 
-func (qe *QueryEngine) executeSql(logStats *sqlQueryStats, conn proto.KVDbExecutorPool, sql string, wantfields bool) (*eproto.QueryResult, error) {
+func (qe *QueryEngine) executeSql(logStats *sqlQueryStats, conn proto.KVExecutorPoolConnection, sql string, wantfields bool) (*eproto.QueryResult, error) {
 	connid := conn.Id()
 	qe.activeConnection = atomic.AddInt64(&qe.activeConnection, 1)
 	defer func() {
@@ -554,7 +552,7 @@ func (qe *QueryEngine) executeSql(logStats *sqlQueryStats, conn proto.KVDbExecut
 
 	// NOTE(szopa): I am not doing this measurement inside
 	// conn.ExecuteFetch because that would require changing the
-	// proto.KVDbExecutorPool interface. Same applies to executeStreamSql.
+	// proto.KVExecutorPoolConnection interface. Same applies to executeStreamSql.
 	fetchStart := time.Now()
 	result, err := conn.ExecuteFetch(sql, int(qe.maxResultSize.Get()), wantfields)
 	logStats.DbResponseTime += time.Now().Sub(fetchStart)

@@ -2,10 +2,10 @@ package rocksdb
 
 import (
 	"errors"
+	"sync/atomic"
 
 	"github.com/senarukana/ratgo"
 	"github.com/senarukana/rationaldb/log"
-	"github.com/senarukana/rationaldb/util/sync2"
 	"github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
@@ -16,7 +16,7 @@ var (
 type RocksDbEngine struct {
 	config           *proto.DBConfigs
 	dbOptions        *ratgo.Options
-	nextConnectionId sync2.AtomicInt64
+	nextConnectionId int64
 	db               *ratgo.DB
 }
 
@@ -67,7 +67,7 @@ func (engine *RocksDbEngine) Init(config *proto.DBConfigs) error {
 
 func (engine *RocksDbEngine) Connect(params *proto.DbConnectParams) (proto.DbConnection, error) {
 	connection := new(RocksDbConnection)
-	connection.id = engine.nextConnectionId.Add(1)
+	connection.id = atomic.AddInt64(&engine.nextConnectionId, 1)
 	connection.db = engine.db
 	return connection, nil
 }

@@ -138,8 +138,7 @@ type ExecPlan struct {
 	// For PLAN_INSERT_SUBQUERY, columns to be inserted
 	ColumnNumbers []int
 
-	Columns   []map[string]interface{}
-	TableInfo *TableInfo
+	Columns []map[string]interface{}
 
 	// PLAN_PK_EQUAL, PLAN_DML_PK: where clause values
 	// PLAN_PK_IN: IN clause values

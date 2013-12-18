@@ -21,7 +21,7 @@ type KVEngineExecutor struct {
 	dbConnection     eproto.DbConnection
 }
 
-func NewKVEngineConnector(params *eproto.DbConnectParams, manger *engine.EngineManager) (*KVDbExecutorPool, error) {
+func NewKVEngineExecutor(params *eproto.DbConnectParams, manger *engine.EngineManager) (*KVExecutorPoolConnection, error) {
 	connection, err := manger.Connect(params)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func NewKVEngineConnector(params *eproto.DbConnectParams, manger *engine.EngineM
 
 func KVExecutorCreator(params *eproto.DbConnectParams, manager *engine.EngineManager) {
 	return func() (connection *KVEngineExecutor, err error) {
-		return NewKVEngineConnector(params, manager)
+		return NewKVEngineExecutor(params, manager)
 	}
 }
 

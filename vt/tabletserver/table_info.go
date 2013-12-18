@@ -18,9 +18,8 @@ type TableInfo struct {
 	*schema.Table
 }
 
-func NewTableInfo(conn PoolConnection, tableName string, tableType string, createTime sqltypes.Value, comment string, cachePool *CachePool) (ti *TableInfo) {
+func NewTableInfo(conn PoolConnection, tableName string, tableType string, createTime sqltypes.Value, comment string) (ti *TableInfo) {
 	ti = loadTableInfo(conn, tableName)
-	ti.initRowCache(conn, tableType, createTime, comment, cachePool)
 	return ti
 }
 
@@ -115,8 +114,4 @@ func (ti *TableInfo) fetchIndexes(conn PoolConnection) bool {
 		ti.Indexes[i].DataColumns = pkIndex.Columns
 	}
 	return true
-}
-
-func (ti *TableInfo) Stats() (hits, absent, misses, invalidations int64) {
-	return ti.hits.Get(), ti.absent.Get(), ti.misses.Get(), ti.invalidations.Get()
 }
