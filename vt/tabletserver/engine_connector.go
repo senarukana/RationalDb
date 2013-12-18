@@ -7,6 +7,7 @@ import (
 	"github.com/senarukana/rationaldb/schema"
 	"github.com/senarukana/rationaldb/sqltypes"
 	"github.com/senarukana/rationaldb/util/sync2"
+	"github.com/senarukana/rationaldb/vt/engine"
 	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
 	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
@@ -16,18 +17,21 @@ type ErrTableExists string
 func (self *ErrTableExists) Error() string { return "Table : " + string(self) + " exists" }
 
 type KVEngineConnector struct {
-	Id               int64
 	connectionParams *eproto.DbConnectParams
-	engine           eproto.DbEngine
+	dbConnection     eproto.DbConnection
 }
 
-func NewKVEngineConnector(params *eproto.DbConnectParams, engine eproto.DbEngine) *KVEngineConnector {
-	return &KVEngineConnector{connectionParams: params, engine: engine}
+func NewKVEngineConnector(params *eproto.DbConnectParams, manger *engine.EngineManager) (*KVEngineConnector, error) {
+	connection, err := manger.Connect(params)
+	if err != nil {
+		return nil, err
+	}
+	return &KVEngineConnector{connectionParams: params, dbConnection: connection}, nil
 }
 
-func KVEngineConnectionCreator(params *eproto.DbConnectParams, engine eproto.DbEngine) {
-	return func() (connection *proto.KVEngineConnection, err error) {
-		return NewKVEngineConnector(params, engine)
+func KVEngineConnectionCreator(params *eproto.DbConnectParams, manager *engine.EngineManager) {
+	return func() (connection *KVEngineConnector, err error) {
+		return NewKVEngineConnector(params, manager)
 	}
 }
 
@@ -107,8 +111,17 @@ func getPkValues(tableInfo *schema.Table, row map[string]sqltypes.Value) (pk str
 	return pk
 }
 
-func (ec *KVEngineConnector) Close() {
+func (ec *KVEngineConnector) Id() int64 {
+	return ec.dbConnection.Id()
+}
 
+func (ec *KVEngineConnector) Close() {
+	ec.dbConnection.Close()
+	ec.dbConnection = nil
+}
+
+func (ec *KVEngineConnector) IsClosed() {
+	return ec.dbConnection == nil
 }
 
 //

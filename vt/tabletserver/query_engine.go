@@ -34,7 +34,7 @@ type QueryEngine struct {
 	// Obtain write lock to start/stop query service
 	mu sync.RWMutex
 
-	dbEngine       eproto.DbEngine
+	engineMgr      *engine.EngineManager
 	connPool       *ConnectionPool
 	streamConnPool *ConnectionPool
 	schemaInfo     *SchemaInfo
@@ -73,6 +73,7 @@ type CacheInvalidator interface {
 
 func NewQueryEngine(config Config) *QueryEngine {
 	qe := &QueryEngine{}
+	qe.engineMgr = engine.NewEngineManager(config.EngineName)
 	qe.connPool = NewConnectionPool("ConnPool", config.PoolSize, time.Duration(config.IdleTimeout*1e9))
 	qe.schemaInfo = NewSchemaInfo(config.QueryCacheSize)
 	qe.consolidator = NewConsolidator()
@@ -93,12 +94,12 @@ func NewQueryEngine(config Config) *QueryEngine {
 	return qe
 }
 
-func (qe *QueryEngine) Open(dbconfig *eproto.DBConfigs) {
+func (qe *QueryEngine) Open(config *eproto.DBConfigs) {
 	// Wait for Close, in case it's running
 	qe.mu.Lock()
 	defer qe.mu.Unlock()
-	qe.dbEngine = engine.GetEngine(conf)
-	connFactory := KVEngineConnectionCreator(dbconfig.AppConnectParams, qe.dbEngine)
+	qe.engineMgr.Init(config)
+	connFactory := KVEngineConnectionCreator(config.AppConnectParams, qe.engineMgr)
 	qe.connPool.Open(connFactory)
 
 	start := time.Now().UnixNano()
@@ -130,6 +131,8 @@ func (qe *QueryEngine) Rollback(logStats *sqlQueryStats, transactionId int64) {
 func (qe *QueryEngine) Execute(logStats *sqlQueryStats, query *proto.Query) (reply *eproto.QueryResult) {
 	qe.mu.RLock()
 	defer qe.mu.RUnlock()
+
+	conn := qe.connPool.Get()
 
 	if query.BindVariables == nil { // will help us avoid repeated nil checks
 		query.BindVariables = make(map[string]interface{})
@@ -412,7 +415,7 @@ func (qe *QueryEngine) mustVerify() bool {
 }
 
 // execDirect always sends the query to dbengine
-func (qe *QueryEngine) execDirect(logStats *sqlQueryStats, plan *CompiledPlan, conn PoolConnection) (result *eproto.QueryResult) {
+func (qe *QueryEngine) execDirect(logStats *sqlQueryStats, plan *CompiledPlan, conn proto.KVEngineConnection) (result *eproto.QueryResult) {
 	if plan.Fields != nil {
 		result = qe.directFetch(logStats, conn, plan.FullQuery, plan.BindVars, nil, nil)
 		result.Fields = plan.Fields

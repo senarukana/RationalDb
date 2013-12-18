@@ -21,6 +21,7 @@ var (
 )
 
 func init() {
+	flag.StringVar(&qsConfig.EngineName, "queryserver-config-engine-name", DefaultQsConfig.EngineName, "default query server engine name")
 	flag.IntVar(&qsConfig.MaxResultSize, "queryserver-config-max-result-size", DefaultQsConfig.MaxResultSize, "query server max result size")
 	flag.IntVar(&qsConfig.StreamBufferSize, "queryserver-config-stream-buffer-size", DefaultQsConfig.StreamBufferSize, "query server stream buffer size")
 	flag.IntVar(&qsConfig.QueryCacheSize, "queryserver-config-query-cache-size", DefaultQsConfig.QueryCacheSize, "query server query cache size")
@@ -29,6 +30,7 @@ func init() {
 }
 
 type Config struct {
+	EngineName         string
 	PoolSize           int
 	StreamPoolSize     int
 	MaxResultSize      int
@@ -48,6 +50,7 @@ type Config struct {
 // great (the overhead makes the final packets on the wire about twice
 // bigger than this).
 var DefaultQsConfig = Config{
+	EngineName:         "rocksdb",
 	PoolSize:           16,
 	StreamPoolSize:     750,
 	MaxResultSize:      10000,

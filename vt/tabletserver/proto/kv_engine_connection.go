@@ -6,7 +6,8 @@ import (
 	"github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
-type KVEngineConnection interface {
+type KVDbExecutor interface {
+	// Connection Operation
 	Id() int64
 	Close()
 	IsClosed() bool
