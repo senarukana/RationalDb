@@ -138,7 +138,7 @@ func buildKey(row []sqltypes.Value) (key string) {
 		}
 		pkValue.EncodeAscii(buf)
 		if i != len(row)-1 {
-			buf.WriteByte('.')
+			buf.WriteByte('|')
 		}
 	}
 	return buf.String()

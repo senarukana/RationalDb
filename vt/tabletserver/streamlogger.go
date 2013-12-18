@@ -25,18 +25,20 @@ const (
 )
 
 type sqlQueryStats struct {
-	Method          string
-	PlanType        string
-	OriginalSql     string
-	BindVariables   map[string]interface{}
-	rewrittenSqls   []string
-	RowsAffected    int
-	NumberOfQueries int
-	StartTime       time.Time
-	EndTime         time.Time
-	QuerySources    byte
-	Rows            [][]sqltypes.Value
-	context         *proto.Context
+	Method               string
+	PlanType             string
+	OriginalSql          string
+	BindVariables        map[string]interface{}
+	rewrittenSqls        []string
+	RowsAffected         int
+	NumberOfQueries      int
+	StartTime            time.Time
+	EndTime              time.Time
+	DbResponseTime       time.Duration
+	WaitingForConnection time.Duration
+	QuerySources         byte
+	Rows                 [][]sqltypes.Value
+	context              *proto.Context
 }
 
 func newSqlQueryStats(methodName string, context *proto.Context) *sqlQueryStats {
@@ -141,7 +143,7 @@ func (log *sqlQueryStats) Username() string {
 func (log *sqlQueryStats) Format(params url.Values) string {
 	_, fullBindParams := params["full"]
 	return fmt.Sprintf(
-		"%v\t%v\t%v\t%v\t%v\t%v\t%v\t%q\t%v\t%v\t%q\t%v\t%v\t%v\t\n",
+		"%v\t%v\t%v\t%v\t%v\t%v\t%v\t%q\t%v\t%v\t%q\t%v\t%v\t%v\t%v\t%v\t\n",
 		log.Method,
 		log.RemoteAddr(),
 		log.Username(),
@@ -154,5 +156,7 @@ func (log *sqlQueryStats) Format(params url.Values) string {
 		log.NumberOfQueries,
 		log.RewrittenSql(),
 		log.FmtQuerySources(),
+		log.DbResponseTime.Seconds(),
+		log.WaitingForConnection.Seconds(),
 		log.SizeOfResponse())
 }

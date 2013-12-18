@@ -6,7 +6,8 @@ import (
 	"github.com/senarukana/rationaldb/vt/engine/proto"
 )
 
-type KVEngineConnection interface {
+type KVExecutorPoolConnection interface {
+	// Connection Operation
 	Id() int64
 	Close()
 	IsClosed() bool
@@ -29,4 +30,4 @@ type KVEngineConnection interface {
 	ShowTable(tableName string) (tableInfo *schema.Table, err error)
 }
 
-type CreateKVEngineConnectionFunc func() (connection *KVEngineConnection, err error)
+type CreateKVExecutorFunc func() (connection KVExecutorPoolConnection, err error)

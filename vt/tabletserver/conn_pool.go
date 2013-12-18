@@ -64,8 +64,8 @@ func (cp *ConnectionPool) Close() {
 	cp.mu.Unlock()
 }
 
-// You must call Recycle on the proto.KVEngineConnection once done.
-func (cp *ConnectionPool) Get() proto.KVEngineConnection {
+// You must call Recycle on the proto.KVExecutorPoolConnection once done.
+func (cp *ConnectionPool) Get() proto.KVExecutorPoolConnection {
 	r, err := cp.pool().Get()
 	if err != nil {
 		panic(NewTabletErrorSql(FATAL, err))
@@ -73,8 +73,8 @@ func (cp *ConnectionPool) Get() proto.KVEngineConnection {
 	return r.(*pooledConnection)
 }
 
-// You must call Recycle on the proto.KVEngineConnection once done.
-func (cp *ConnectionPool) SafeGet() (proto.KVEngineConnection, error) {
+// You must call Recycle on the proto.KVExecutorPoolConnection once done.
+func (cp *ConnectionPool) SafeGet() (proto.KVExecutorPoolConnection, error) {
 	r, err := cp.pool().Get()
 	if err != nil {
 		return nil, err
@@ -82,8 +82,8 @@ func (cp *ConnectionPool) SafeGet() (proto.KVEngineConnection, error) {
 	return r.(*pooledConnection), nil
 }
 
-// You must call Recycle on the proto.KVEngineConnection once done.
-func (cp *ConnectionPool) TryGet() proto.KVEngineConnection {
+// You must call Recycle on the proto.KVExecutorPoolConnection once done.
+func (cp *ConnectionPool) TryGet() proto.KVExecutorPoolConnection {
 	r, err := cp.pool().TryGet()
 	if err != nil {
 		panic(NewTabletErrorSql(FATAL, err))
@@ -94,7 +94,7 @@ func (cp *ConnectionPool) TryGet() proto.KVEngineConnection {
 	return r.(*pooledConnection)
 }
 
-func (cp *ConnectionPool) Put(conn proto.KVEngineConnection) {
+func (cp *ConnectionPool) Put(conn proto.KVExecutorPoolConnection) {
 	cp.pool().Put(conn)
 }
 
@@ -144,9 +144,9 @@ func (cp *ConnectionPool) IdleTimeout() time.Duration {
 	return cp.pool().IdleTimeout()
 }
 
-// pooledConnection re-exposes DBConnection as a proto.KVEngineConnection
+// pooledConnection re-exposes DBConnection as a proto.KVExecutorPoolConnection
 type pooledConnection struct {
-	proto.KVEngineConnection
+	proto.KVExecutorPoolConnection
 	pool *ConnectionPool
 }
 

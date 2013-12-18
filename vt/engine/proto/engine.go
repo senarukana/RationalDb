@@ -1,24 +1,5 @@
 package proto
 
-type DbRange struct {
-	Start []byte
-	End   []byte
-}
-
-type DbCursor interface {
-	Next()
-	Prev()
-	Valid() bool
-	Key() []byte
-	Value() []byte
-	Close()
-	Error() error
-}
-
-type DbSnapshot struct {
-	Snapshot interface{}
-}
-
 type DbTransactionEngine interface {
 	Begin() (uint64, error)
 	Commit(uint64) error
@@ -36,31 +17,11 @@ type DbTransactionEngine interface {
 	Iterate(tid uint64, options *DbReadOptions, start []byte, end []byte) error
 }
 
-type DbEngineConnection interface {
-	Connect(*DbConnectParams)
-	Close()
-
-	Get(options *DbReadOptions, key []byte) ([]byte, error)
-	Gets(options *DbReadOptions, key [][]byte) ([][]byte, error)
-
-	// Put the data in the engine.
-	// If the key is already existed, It will replace it.
-	Put(options *DbWriteOptions, key, value []byte) error
-	Puts(options *DbWriteOptions, keys, values [][]byte) error
-
-	Delete(options *DbWriteOptions, key []byte) error
-	Deletes(options *DbWriteOptions, key [][]byte) error
-
-	Iterate(options *DbReadOptions, start []byte, end []byte) (DbCursor, error)
-	Snapshot() (*DbSnapshot, error)
-	ReleaseSnapshot(*DbSnapshot) error
-}
-
 type DbEngine interface {
-	DbEngineConnection
+	Name() string
 	Init(*DBConfigs) error
+	Connect(*DbConnectParams) (DbConnection, error)
 	Shutdown() error
-	Destory() error
 }
 
 /*type DbOperation interface {

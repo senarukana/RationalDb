@@ -18,9 +18,8 @@ type TableInfo struct {
 	*schema.Table
 }
 
-func NewTableInfo(conn PoolConnection, tableName string, tableType string, createTime sqltypes.Value, comment string, cachePool *CachePool) (ti *TableInfo) {
+func NewTableInfo(conn PoolConnection, tableName string, tableType string, createTime sqltypes.Value, comment string) (ti *TableInfo) {
 	ti = loadTableInfo(conn, tableName)
-	ti.initRowCache(conn, tableType, createTime, comment, cachePool)
 	return ti
 }
 
@@ -115,46 +114,4 @@ func (ti *TableInfo) fetchIndexes(conn PoolConnection) bool {
 		ti.Indexes[i].DataColumns = pkIndex.Columns
 	}
 	return true
-}
-
-func (ti *TableInfo) initRowCache(conn PoolConnection, tableType string, createTime sqltypes.Value, comment string, cachePool *CachePool) {
-	if cachePool.IsClosed() {
-		return
-	}
-
-	if strings.Contains(comment, "vtocc_nocache") {
-		log.Info("%s commented as vtocc_nocache. Will not be cached.", ti.Name)
-		return
-	}
-
-	if tableType == "VIEW" {
-		log.Info("%s is a view. Will not be cached.", ti.Name)
-		return
-	}
-
-	if ti.PKColumns == nil {
-		log.Info("Table %s has no primary key. Will not be cached.", ti.Name)
-		return
-	}
-	for _, col := range ti.PKColumns {
-		if ti.Columns[col].Category == schema.CAT_OTHER {
-			log.Info("Table %s pk has unsupported column types. Will not be cached.", ti.Name)
-			return
-		}
-	}
-
-	ti.CacheType = schema.CACHE_RW
-	ti.Cache = NewRowCache(ti, cachePool)
-}
-
-func (ti *TableInfo) StatsJSON() string {
-	if ti.Cache == nil {
-		return fmt.Sprintf("null")
-	}
-	h, a, m, i := ti.Stats()
-	return fmt.Sprintf("{\"Hits\": %v, \"Absent\": %v, \"Misses\": %v, \"Invalidations\": %v}", h, a, m, i)
-}
-
-func (ti *TableInfo) Stats() (hits, absent, misses, invalidations int64) {
-	return ti.hits.Get(), ti.absent.Get(), ti.misses.Get(), ti.invalidations.Get()
 }
