@@ -178,6 +178,7 @@ func (qe *QueryEngine) Execute(logStats *sqlQueryStats, query *proto.Query) (rep
 			}
 			reply = qe.directFetch(logStats, conn, plan.FullQuery, plan.BindVars, nil, nil)
 		case sqlparser.PLAN_INSERT_PK:
+			Insert(basePlan.TableInfo, basePlan.Columns, true)
 			reply = qe.execInsertPK(logStats, conn, plan, invalidator)
 		case sqlparser.PLAN_INSERT_SUBQUERY:
 			reply = qe.execInsertSubquery(logStats, conn, plan, invalidator)
