@@ -14,10 +14,10 @@ import (
 
 	"github.com/senarukana/rationaldb/cache"
 	"github.com/senarukana/rationaldb/log"
+	"github.com/senarukana/rationaldb/schema"
 	"github.com/senarukana/rationaldb/sqltypes"
 	"github.com/senarukana/rationaldb/util/stats"
 	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
-	"github.com/senarukana/rationaldb/vt/schema"
 	"github.com/senarukana/rationaldb/vt/sqlparser"
 	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )

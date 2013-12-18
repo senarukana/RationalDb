@@ -2,12 +2,11 @@ package tabletserver
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/senarukana/rationaldb/schema"
 	"github.com/senarukana/rationaldb/sqltypes"
-	"github.com/senarukana/rationaldb/vt/engine"
+	"github.com/senarukana/rationaldb/util/sync2"
 	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
 	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
@@ -17,6 +16,7 @@ type ErrTableExists string
 func (self *ErrTableExists) Error() string { return "Table : " + string(self) + " exists" }
 
 type KVEngineConnector struct {
+	Id               int64
 	connectionParams *eproto.DbConnectParams
 	engine           eproto.DbEngine
 }
@@ -42,28 +42,28 @@ func buildValue(bytes []byte, filedType uint32) sqltypes.Value {
 	}
 }
 
-func (executor *KVEngineConnector) getTableKey(tableName string) string {
-	return fmt.Sprintf("%s|tables|%s", executor.connectionParams.DbName, tableName)
+func (ec *KVEngineConnector) getTableKey(tableName string) string {
+	return fmt.Sprintf("%s|tables|%s", ec.connectionParams.DbName, tableName)
 }
 
-func (executor *KVEngineConnector) getTableDescriptionKey(tableName string) string {
-	return fmt.Sprintf("%s|tables|%s|description", executor.connectionParams.DbName, tableName)
+func (ec *KVEngineConnector) getTableDescriptionKey(tableName string) string {
+	return fmt.Sprintf("%s|tables|%s|description", ec.connectionParams.DbName, tableName)
 }
 
-func (executor *KVEngineConnector) getTablesKey() string {
-	return fmt.Sprintf("%s|tables|", executor.connectionParams.DbName)
+func (ec *KVEngineConnector) getTablesKey() string {
+	return fmt.Sprintf("%s|tables|", ec.connectionParams.DbName)
 }
 
-func (executor *KVEngineConnector) getTableRowKey(tableName string) string {
-	return fmt.Sprintf("%s|%s|", executor.connectionParams.DbName, tableName)
+func (ec *KVEngineConnector) getTableRowKey(tableName string) string {
+	return fmt.Sprintf("%s|%s|", ec.connectionParams.DbName, tableName)
 }
 
-func (executor *KVEngineConnector) getTableRowPkColumnKey(tableName string, columnName string) {
-	return fmt.Sprintf("%v|%v|%v", executor.connectionParams.DbName, tableName, columnName)
+func (ec *KVEngineConnector) getTableRowPkColumnKey(tableName string, columnName string) {
+	return fmt.Sprintf("%v|%v|%v", ec.connectionParams.DbName, tableName, columnName)
 }
 
-func (executor *KVEngineConnector) getTableRowColumnKey(tableName string, columnName string, pk []byte) {
-	return fmt.Sprintf("%v|%v|%v|%v", executor.connectionParams.DbName, tableName, columnName, pk)
+func (ec *KVEngineConnector) getTableRowColumnKey(tableName string, columnName string, pk []byte) {
+	return fmt.Sprintf("%v|%v|%v|%v", ec.connectionParams.DbName, tableName, columnName, pk)
 }
 
 /*type JsonObject interface {
@@ -107,23 +107,27 @@ func getPkValues(tableInfo *schema.Table, row map[string]sqltypes.Value) (pk str
 	return pk
 }
 
+func (ec *KVEngineConnector) Close() {
+
+}
+
 //
 // Basic Operation
 //
 
-func (executor *KVEngineConnector) Get(key []byte) ([]byte, error) {
-	return executor.engine.Get(nil, key)
+func (ec *KVEngineConnector) Get(key []byte) ([]byte, error) {
+	return ec.engine.Get(nil, key)
 }
 
-func (executor *KVEngineConnector) Put(key, value []byte) error {
-	return executor.engine.Put(nil, key, value)
+func (ec *KVEngineConnector) Put(key, value []byte) error {
+	return ec.engine.Put(nil, key, value)
 }
 
 //
 // CRUD Operation
 //
 
-func (executor *KVEngineConnector) Insert(tableInfo *schema.Table, insertedRowValues []map[string]sqltypes.Value, sync bool) (err error) {
+func (ec *KVEngineConnector) Insert(tableInfo *schema.Table, insertedRowValues []map[string]sqltypes.Value, sync bool) (err error) {
 	tableName := tableInfo.Name
 	var pk, key string
 	keys := make([][]byte, len(insertedRowValues)*len(tableInfo.Columns))
@@ -138,11 +142,11 @@ func (executor *KVEngineConnector) Insert(tableInfo *schema.Table, insertedRowVa
 				}
 			}*/
 			if columnName == pkColumnName {
-				key = executor.getTableRowPkColumnKey(tableName, columnName)
+				key = ec.getTableRowPkColumnKey(tableName, columnName)
 				values[idx] = []byte{'0'}
 				keys[idx] = []byte(key)
 			} else {
-				key = executor.getTableRowColumnKey(tableName, columnName, []byte(pk))
+				key = ec.getTableRowColumnKey(tableName, columnName, []byte(pk))
 				values[idx] = columnValue.Raw()
 				keys[idx] = key
 			}
@@ -152,7 +156,7 @@ func (executor *KVEngineConnector) Insert(tableInfo *schema.Table, insertedRowVa
 
 	wo := new(proto.DbWriteOptions)
 	wo.Sync = sync
-	err = executor.engine.Puts(wo, keys, values)
+	err = ec.engine.Puts(wo, keys, values)
 	if err != nil {
 		log.Error("Rocksdb Insert error, %v", err.Error())
 		return err
@@ -160,20 +164,20 @@ func (executor *KVEngineConnector) Insert(tableInfo *schema.Table, insertedRowVa
 	return nil
 }
 
-func (executor *KVEngineConnector) Delete(tableInfo *schema.Table, primaryKeys [][]byte, sync bool) (err error) {
+func (ec *KVEngineConnector) Delete(tableInfo *schema.Table, primaryKeys [][]byte, sync bool) (err error) {
 	keys := make([][]byte, len(primaryKeys)*len(tableInfo.Columns))
 	tableName := tableInfo.Name
 	var key string
 	idx := 0
 	for _, pk := range primaryKeys {
 		for _, column := range tableInfo.Columns {
-			keys[idx] = executor.getTableRowColumnKey(tableName, column.Name, pk)
+			keys[idx] = ec.getTableRowColumnKey(tableName, column.Name, pk)
 			idx++
 		}
 	}
 	wo := new(proto.DbWriteOptions)
 	wo.Sync = sync
-	err = executor.engine.Deletes(wo, keys)
+	err = ec.engine.Deletes(wo, keys)
 	if err != nil {
 		log.Error("Rocksdb Delete error, %v", err.Error())
 		return err
@@ -181,7 +185,7 @@ func (executor *KVEngineConnector) Delete(tableInfo *schema.Table, primaryKeys [
 	return nil
 }
 
-func (executor *KVEngineConnector) Update(tableInfo *schema.Table, primaryKeys [][]byte, updateValues map[string]sqltypes.Value, sync bool) (err error) {
+func (ec *KVEngineConnector) Update(tableInfo *schema.Table, primaryKeys [][]byte, updateValues map[string]sqltypes.Value, sync bool) (err error) {
 	keys := make([][]byte, len(primaryKeys)*len(updateValues))
 	values := make([][]byte, len(primaryKeys)*len(updateValues))
 	idx := 0
@@ -189,14 +193,14 @@ func (executor *KVEngineConnector) Update(tableInfo *schema.Table, primaryKeys [
 	var key string
 	for _, pk := range primaryKeys {
 		for columnName, value := range updateValues {
-			keys[idx] = executor.getTableRowColumnKey(tableName, columnName, pk)
+			keys[idx] = ec.getTableRowColumnKey(tableName, columnName, pk)
 			values[idx] = value.Raw()
 			idx++
 		}
 	}
 	wo := new(proto.DbWriteOptions)
 	wo.Sync = sync
-	err = executor.engine.Set(wo, keys, values)
+	err = ec.engine.Set(wo, keys, values)
 	if err != nil {
 		log.Error("Rocksdb Update error, %v", err.Error())
 		return err
@@ -204,17 +208,17 @@ func (executor *KVEngineConnector) Update(tableInfo *schema.Table, primaryKeys [
 	return nil
 }
 
-func (executor *KVEngineConnector) PkInFetch(tableInfo *schema.Table, primaryKeys [][]byte, fields []string, ro *ratgo.ReadOptions) (qr *proto.QueryResult, err error) {
+func (ec *KVEngineConnector) PkInFetch(tableInfo *schema.Table, primaryKeys [][]byte, fields []string, ro *eproto.DbReadOptions) (qr *eproto.QueryResult, err error) {
 	tableName := tableInfo.Name
 	// gather keys
 	keys := make([]string, len(primaryKeys)*len(fields))
 	for i, pk := range primaryKeys {
 		for j, field := range fields {
-			keys[i*len[primaryKeys]+j] = executor.getTableRowColumnKey(tableName, field, pk)
+			keys[i*len[primaryKeys]+j] = ec.getTableRowColumnKey(tableName, field, pk)
 		}
 	}
 
-	results, errors := engine.db.MultiGet(ro, keys)
+	results, errors := ec.engine.Gets(ro, keys)
 
 	// if any errors occured, give up this result
 	qr = new(proto.QueryResult)
@@ -247,13 +251,13 @@ func (executor *KVEngineConnector) PkInFetch(tableInfo *schema.Table, primaryKey
 		if columnIdx == -1 {
 			return nil, fmt.Errorf("Field %s doesn't exist in the Table:%s", field, tableName)
 		}
-		qr.Fields[i] = proto.Field{Name: field, Type: tableInfo.Columns[columnIdx].Type}
+		qr.Fields[i] = eproto.Field{Name: field, Type: tableInfo.Columns[columnIdx].Type}
 	}
 	return qr, nil
 }
 
-func (executor *KVEngineConnector) PkNotInFetch(tableInfo *schema.Table, selectValue []proto.FieldValue, ro *ratgo.ReadOptions) (primaryKeys []string, err error) {
-
+func (ec *KVEngineConnector) PkNotInFetch(tableInfo *schema.Table, selectValue []eproto.FieldValue, ro *eproto.DbReadOptions) (primaryKeys [][]byte, err error) {
+	return
 }
 
 //
@@ -268,10 +272,10 @@ func (executor *KVEngineConnector) PkNotInFetch(tableInfo *schema.Table, selectV
 
 // check if the table exists first.
 // If not then create table, otherwise return error
-func (executor *KVEngineConnector) CreateTable(tableInfo *schema.Table) (err error) {
-	tableKey := executor.getTableKey(tableInfo.Name)
+func (ec *KVEngineConnector) CreateTable(tableInfo *schema.Table) (err error) {
+	tableKey := ec.getTableKey(tableInfo.Name)
 
-	t, err := executor.engine.Get(nil, tableKey)
+	t, err := ec.engine.Get(nil, tableKey)
 	if err != nil {
 		return err
 	}
@@ -281,15 +285,15 @@ func (executor *KVEngineConnector) CreateTable(tableInfo *schema.Table) (err err
 
 	wo := new(proto.DbWriteOptions)
 	wo.Sync = true
-	return executor.engine.Set(wo, tableKey, []byte(tableInfo.Json()))
+	return ec.engine.Set(wo, tableKey, []byte(tableInfo.Json()))
 }
 
 // table stored path is : dbname|tables|tableName
-func (executor *KVEngineConnector) ShowTables() (tables []*schema.Table, err error) {
+func (ec *KVEngineConnector) ShowTables() (tables []*schema.Table, err error) {
 	// we exepect table name should not contain the folloing 3 char '|,},Del'
-	keyStart := executor.getTablesKey()
-	keyEnd := executor.getTablesKey() + "|"
-	iter := executor.engine.Iterate(nil, keyStart, keyEnd)
+	keyStart := ec.getTablesKey()
+	keyEnd := ec.getTablesKey() + "|"
+	iter := ec.engine.Iterate(nil, keyStart, keyEnd)
 	var tablesName [][]byte
 	for ; iter.Valid(); iter.Next() {
 		tablesName = append(tablesName, string(iter.Value()))
@@ -298,7 +302,7 @@ func (executor *KVEngineConnector) ShowTables() (tables []*schema.Table, err err
 		return nil, err
 	}
 
-	tablesBytes, err := executor.engine.Gets(nil, tablesName)
+	tablesBytes, err := ec.engine.Gets(nil, tablesName)
 	if err != nil {
 		return err
 	}
@@ -315,8 +319,8 @@ func (executor *KVEngineConnector) ShowTables() (tables []*schema.Table, err err
 }
 
 // dbName|tables|tableName|description
-func (executor *KVEngineConnector) ShowTable(tableName string) (tableInfo *schema.Table, err error) {
-	tableByte, err := executor.engine.Get(nil, executor.getTableDescriptionKey(tableName))
+func (ec *KVEngineConnector) ShowTable(tableName string) (tableInfo *schema.Table, err error) {
+	tableByte, err := ec.engine.Get(nil, ec.getTableDescriptionKey(tableName))
 	if err != nil {
 		return nil, err
 	}

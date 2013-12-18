@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/senarukana/rationaldb/log"
-	"github.com/senarukana/rationaldb/mysql"
 	"github.com/senarukana/rationaldb/util/tb"
 )
 
@@ -23,23 +22,14 @@ const (
 type TabletError struct {
 	ErrorType int
 	Message   string
-	SqlError  int
-}
-
-// This is how go-mysql exports its error number
-type hasNumber interface {
-	Number() int
 }
 
 func NewTabletError(errorType int, format string, args ...interface{}) *TabletError {
-	return &TabletError{errorType, fmt.Sprintf(format, args...), 0}
+	return &TabletError{errorType, fmt.Sprintf(format, args...)}
 }
 
 func NewTabletErrorSql(errorType int, err error) *TabletError {
 	te := NewTabletError(errorType, "%s", err)
-	if sqlErr, ok := err.(hasNumber); ok {
-		te.SqlError = sqlErr.Number()
-	}
 	return te
 }
 
@@ -68,15 +58,6 @@ func (te *TabletError) RecordStats() {
 		errorStats.Add("TxPoolFull", 1)
 	case NOT_IN_TX:
 		errorStats.Add("NotInTx", 1)
-	default:
-		switch te.SqlError {
-		case mysql.DUP_ENTRY:
-			errorStats.Add("DupKey", 1)
-		case mysql.LOCK_WAIT_TIMEOUT, mysql.LOCK_DEADLOCK:
-			errorStats.Add("Deadlock", 1)
-		default:
-			errorStats.Add("Fail", 1)
-		}
 	}
 }
 

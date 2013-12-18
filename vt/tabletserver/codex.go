@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/senarukana/rationaldb/log"
+	"github.com/senarukana/rationaldb/schema"
 	"github.com/senarukana/rationaldb/sqltypes"
-	"github.com/senarukana/rationaldb/vt/schema"
 )
 
 // buildValueList builds the set of PK reference rows used to drive the next query.

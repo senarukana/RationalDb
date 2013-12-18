@@ -6,9 +6,7 @@ package tabletserver
 
 import (
 	"flag"
-	"io/ioutil"
 	"net/http"
-	"strconv"
 
 	"github.com/senarukana/rationaldb/log"
 	rpcproto "github.com/senarukana/rationaldb/rpcwrap/proto"
