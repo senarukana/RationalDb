@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/senarukana/rationaldb/log"
-	"github.com/senarukana/rationaldb/schema"
-	"github.com/senarukana/rationaldb/sqltypes"
+	log "github.com/golang/glog"
+	"github.com/youtube/vitess/go/sqltypes"
+	"sqlProject/schema"
+	// "github.com/youtube/vitess/go/vt/schema"
 )
 
 type PlanType int
@@ -138,7 +139,13 @@ type ExecPlan struct {
 	// For PLAN_INSERT_SUBQUERY, columns to be inserted
 	ColumnNumbers []int
 
-	Columns []map[string]interface{}
+	ColumnNames  []string
+	ColumnValues []interface{}
+
+	columns_num int
+	// Columns     map[string]interface{}
+	Columns []map[string]sqltypes.Value
+	// PKColumns map[string]interface{}
 
 	// PLAN_PK_EQUAL, PLAN_DML_PK: where clause values
 	// PLAN_PK_IN: IN clause values
@@ -168,13 +175,25 @@ type TableGetter func(tableName string) (*schema.Table, bool)
 func ExecParse(sql string, getTable TableGetter) (plan *ExecPlan, err error) {
 	defer handleError(&err)
 
+	fmt.Println("sql: ", sql)
+
 	tree, err := Parse(sql)
+	// fmt.Println("tree: ", tree.Type)
+	// fmt.Println("tree-value-----------------------", tree.Value)
+	// fmt.Println("tree-type-----------------------", tree.Sub[3].Sub[0].Sub)
+
+	sub := tree.Sub
+	for i := 0; i < len(sub); i++ {
+		fmt.Println(sub[i])
+		fmt.Println(sub[i].Sub)
+	}
+
 	if err != nil {
 		return nil, err
 	}
 	plan = tree.execAnalyzeSql(getTable)
 	if plan.PlanId == PLAN_PASS_DML {
-		log.Warn("PASS_DML: %s", sql)
+		log.Warningf("PASS_DML: %s", sql)
 	}
 	return plan, nil
 }
@@ -273,10 +292,10 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 	}
 
 	// Further improvements possible only if table is row-cached
-	if tableInfo.CacheType == schema.CACHE_NONE || tableInfo.CacheType == schema.CACHE_W {
-		plan.Reason = REASON_NOCACHE
-		return plan
-	}
+	// if tableInfo.CacheType == schema.CACHE_NONE || tableInfo.CacheType == schema.CACHE_W {
+	// 	plan.Reason = REASON_NOCACHE
+	// 	return plan
+	// }
 
 	// Select expressions
 	selects := node.At(SELECT_EXPR_OFFSET).execAnalyzeSelectExpressions(tableInfo)
@@ -292,7 +311,7 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 		plan.Reason = REASON_WHERE
 		return plan
 	}
-
+	fmt.Println(".......conditions: ", conditions)
 	// order
 	if node.At(SELECT_ORDER_OFFSET).Len() != 0 {
 		plan.Reason = REASON_ORDER
@@ -303,7 +322,7 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 	if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
 		panic("unexpected")
 	}
-
+	fmt.Println("...hehe")
 	// Attempt PK match only if there's no limit clause
 	if node.At(SELECT_LIMIT_OFFSET).Len() == 0 {
 		planId, pkValues := getSelectPKValues(conditions, tableInfo.Indexes[0])
@@ -320,6 +339,7 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 			return plan
 		}
 	}
+	fmt.Println("...memeda")
 
 	if len(tableInfo.Indexes[0].Columns) != 1 {
 		plan.Reason = REASON_COMPOSITE_PK
@@ -353,15 +373,19 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 	tableName := string(node.At(INSERT_TABLE_OFFSET).Value)
 	tableInfo := plan.setTableInfo(tableName, getTable)
 
-	plan.TableInfo = tableInfo
-
 	if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
-		log.Warn("no primary key for table %s", tableName)
+		log.Warningf("no primary key for table %s", tableName)
+		fmt.Println("no primary key for table %s", tableName)
 		plan.Reason = REASON_TABLE_NOINDEX
 		return plan
 	}
 
 	pkColumnNumbers := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertPKColumns(tableInfo)
+	fmt.Println("pkColumnNumbers: ", pkColumnNumbers)
+
+	// ColumnNames := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertColumns(tableInfo)
+	// plan.ColumnNames = ColumnNames
+	// fmt.Println("ColumnNames: ", plan.ColumnNames)
 
 	if node.At(INSERT_ON_DUP_OFFSET).Len() != 0 {
 		var ok bool
@@ -377,15 +401,15 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 		plan.OuterQuery = node.GenerateInsertOuterQuery()
 		plan.Subquery = rowValues.GenerateSelectLimitQuery()
 		// Column list syntax is a subset of select expressions
-		if node.At(INSERT_COLUMN_LIST_OFFSET).Len() != 0 {
-			plan.ColumnNumbers = node.At(INSERT_COLUMN_LIST_OFFSET).execAnalyzeSelectExpressions(tableInfo)
-		} else {
-			// SELECT_STAR node will expand into all columns
-			n := NewSimpleParseNode(NODE_LIST, "")
-			n.Push(NewSimpleParseNode(SELECT_STAR, "*"))
-			plan.ColumnNumbers = n.execAnalyzeSelectExpressions(tableInfo)
-		}
-		plan.SubqueryPKColumns = pkColumnNumbers
+		// if node.At(INSERT_COLUMN_LIST_OFFSET).Len() != 0 {
+		// 	plan.ColumnNumbers = node.At(INSERT_COLUMN_LIST_OFFSET).execAnalyzeSelectExpressions(tableInfo)
+		// } else {
+		// 	// SELECT_STAR node will expand into all columns
+		// 	n := NewSimpleParseNode(NODE_LIST, "")
+		// 	n.Push(NewSimplseParseNode(SELECT_STAR, "*"))
+		// 	plan.ColumnNumbers = n.execAnalyzeSelectExpressions(tableInfo)
+		// }
+		// plan.SubqueryPKColumns = pkColumnNumbers
 		return plan
 	}
 
@@ -395,6 +419,10 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 		plan.OuterQuery = plan.FullQuery
 		plan.PKValues = pkValues
 	}
+	// if ColumnValues := getInsertValues(ColumnNames, rowList, tableInfo); ColumnValues != nil {
+	// 	plan.ColumnValues = ColumnValues
+	// 	fmt.Println("ColumnValues: ", plan.ColumnValues)
+	// }
 
 	if Columns := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertColumnValue(tableInfo, rowList); Columns != nil {
 		plan.Columns = Columns
@@ -402,6 +430,8 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 		fmt.Println("Columns: ", plan.Columns)
 
 	}
+
+	plan.TableName = tableName
 
 	return plan
 }
@@ -414,7 +444,7 @@ func (node *Node) execAnalyzeUpdate(getTable TableGetter) (plan *ExecPlan) {
 	tableInfo := plan.setTableInfo(tableName, getTable)
 
 	if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
-		log.Warn("no primary key for table %s", tableName)
+		log.Warningf("no primary key for table %s", tableName)
 		plan.Reason = REASON_TABLE_NOINDEX
 		return plan
 	}
@@ -453,7 +483,7 @@ func (node *Node) execAnalyzeDelete(getTable TableGetter) (plan *ExecPlan) {
 	tableInfo := plan.setTableInfo(tableName, getTable)
 
 	if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
-		log.Warn("no primary key for table %s", tableName)
+		log.Warningf("no primary key for table %s", tableName)
 		plan.Reason = REASON_TABLE_NOINDEX
 		return plan
 	}
@@ -699,7 +729,7 @@ func (node *Node) execAnalyzeUpdateExpressions(pkIndex *schema.Index) (pkValues 
 		}
 		value := node.At(i).At(1).execAnalyzeValue()
 		if value == nil {
-			log.Warn("expression is too complex %v", node.At(i).At(0))
+			log.Warningf("expression is too complex %v", node.At(i).At(0))
 			return nil, false
 		}
 		if pkValues == nil {
@@ -713,44 +743,18 @@ func (node *Node) execAnalyzeUpdateExpressions(pkIndex *schema.Index) (pkValues 
 //-----------------------------------------------
 // Insert
 
-func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (Columns []map[string]interface{}) {
-	Columns = make([]map[string]interface{}, len(node.Sub))
-	// pkIndex := tableInfo.Indexes[0]
-	for i, column := range node.Sub {
-		// index := pkIndex.FindColumn(string(column.Value))
-		// if index != -1 {
-		// 	continue
-		// }
-		values := make([]interface{}, rowList.Len())
-		for j := 0; j < rowList.Len(); j++ {
-			node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
-			value := node.execAnalyzeValue()
-			if value == nil {
-				log.Warningf("insert is too complex %v", node)
-				return nil
-			}
-			values[j] = asInterface(value)
-		}
-		if len(values) == 1 {
-			Columns[i] = map[string]interface{}{"name": string(column.Value), "value": values[0]}
-		} else {
-			fmt.Println("ValuesLen: ", len(values))
-			Columns[i] = map[string]interface{}{"name": string(column.Value), "value": values}
-		}
-	}
-	return Columns
-}
-
 func (node *Node) getInsertPKColumns(tableInfo *schema.Table) (pkColumnNumbers []int) {
 	if node.Len() == 0 {
 		return tableInfo.PKColumns
 	}
 	pkIndex := tableInfo.Indexes[0]
+	fmt.Println("pkIndex: ", pkIndex)
 	pkColumnNumbers = make([]int, len(pkIndex.Columns))
 	for i := range pkColumnNumbers {
 		pkColumnNumbers[i] = -1
 	}
 	for i, column := range node.Sub {
+		fmt.Println("...", column)
 		index := pkIndex.FindColumn(string(column.Value))
 		if index == -1 {
 			continue
@@ -759,6 +763,79 @@ func (node *Node) getInsertPKColumns(tableInfo *schema.Table) (pkColumnNumbers [
 	}
 	return pkColumnNumbers
 }
+
+func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (Columns []map[string]sqltypes.Value) {
+	Columns = make([]map[string]sqltypes.Value, len(node.Sub))
+	// pkIndex := tableInfo.Indexes[0]
+	for i, column := range node.Sub {
+		// index := pkIndex.FindColumn(string(column.Value))
+		// if index != -1 {
+		// 	continue
+		// }
+		values := make([]sqltypes.Value, rowList.Len())
+		for j := 0; j < rowList.Len(); j++ {
+			node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
+			value := node.execAnalyzeValue()
+			if value == nil {
+				log.Warningf("insert is too complex %v", node)
+				return nil
+			}
+			// values[j] = asInterface(value)
+			values[j] = asValue(value)
+		}
+		if len(values) == 1 {
+			// m := map[string]sqltypes.Value
+			// m[column.Value] = values[0]
+			// Columns[i] = m
+			Columns[i] = map[string]sqltypes.Value{string(column.Value): values[0]}
+		} else {
+			fmt.Println("ValuesLen: ", len(values))
+			// Columns[i] = map[string]sqltypes.Value{string(column.Value): values}
+		}
+	}
+	return Columns
+}
+
+// func (node *Node) getInsertColumns(tableInfo *schema.Table) (ColumnNames []string) {
+
+// 	ColumnNames = make([]string, len(tableInfo.Columns))
+// 	for i := range ColumnNames {
+// 		ColumnNames[i] = "null"
+// 	}
+// 	for i, column := range node.Sub {
+// 		fmt.Println("...............", column.Value)
+// 		ColumnNames[i] = string(column.Value)
+// 	}
+// 	return ColumnNames
+// }
+
+// func getInsertValues(ColumnNames []string, rowList *Node, tableInfo *schema.Table) (ColumnValues []interface{}) {
+
+// 	ColumnValues = make([]interface{}, len( ColumnNames))
+// 	for index, columnName := range ColumnNames {
+// 		if columnName == "null" {
+// 			ColumnValues[index] = "null"
+// 			continue
+// 		}
+// 		values := make([]interface{}, rowList.Len())
+// 		for j := 0; j < rowList.Len(); j++ {
+// 			node := rowList.At(j).At(0).At(index) // NODE_LIST->'('->NODE_LIST->Value
+// 			value := node.execAnalyzeValue()
+// 			if value == nil {
+// 				log.Warningf("insert is too complex %v", node)
+// 				return nil
+// 			}
+// 			values[j] = asInterface(value)
+// 		}
+// 		if len(values) == 1 {
+// 			ColumnValues[index] = values[0]
+// 		} else {
+// 			ColumnValues[index] = values
+// 		}
+// 	}
+
+// 	return ColumnValues
+// }
 
 func getInsertPKValues(pkColumnNumbers []int, rowList *Node, tableInfo *schema.Table) (pkValues []interface{}) {
 	pkValues = make([]interface{}, len(pkColumnNumbers))
@@ -775,7 +852,7 @@ func getInsertPKValues(pkColumnNumbers []int, rowList *Node, tableInfo *schema.T
 			node := rowList.At(j).At(0).At(columnNumber) // NODE_LIST->'('->NODE_LIST->Value
 			value := node.execAnalyzeValue()
 			if value == nil {
-				log.Warn("insert is too complex %v", node)
+				log.Warningf("insert is too complex %v", node)
 				return nil
 			}
 			values[j] = asInterface(value)
@@ -815,11 +892,13 @@ func (is *IndexScore) FindMatch(columnName string) int {
 	}
 	if index := is.Index.FindColumn(columnName); index != -1 {
 		is.ColumnMatch[index] = true
+		fmt.Println("is.ColumnMatch: true")
 		return index
 	}
 	// If the column is among the data columns, we can still use
 	// the index without going to the main table
 	if index := is.Index.FindDataColumn(columnName); index == -1 {
+		fmt.Println("is.MatchFailed true")
 		is.MatchFailed = true
 	}
 	return -1
@@ -894,6 +973,8 @@ func getIndexMatch(conditions []*Node, indexes []*schema.Index) string {
 	indexScores := NewIndexScoreList(indexes)
 	for _, condition := range conditions {
 		for _, index := range indexScores {
+			fmt.Println("...index ", indexScores)
+			fmt.Println("...condition: ", condition.At(0).String())
 			index.FindMatch(string(condition.At(0).Value))
 		}
 	}
@@ -901,10 +982,13 @@ func getIndexMatch(conditions []*Node, indexes []*schema.Index) string {
 	highScorer := -1
 	for i, index := range indexScores {
 		curScore := index.GetScore()
+		fmt.Println("...curScore ", curScore)
 		if curScore == NO_MATCH {
+			fmt.Println("...curScore ", curScore)
 			continue
 		}
 		if curScore == PERFECT_SCORE {
+			fmt.Println("...curScorse ", curScore)
 			highScorer = i
 			break
 		}
@@ -1121,6 +1205,20 @@ func asInterface(node *Node) interface{} {
 	switch node.Type {
 	case VALUE_ARG:
 		return string(node.Value)
+	case STRING:
+		return sqltypes.MakeString(node.Value)
+	case NUMBER:
+		n, err := sqltypes.BuildNumeric(string(node.Value))
+		if err != nil {
+			panic(NewParserError("Type mismatch: %s", err))
+		}
+		return n
+	}
+	panic(NewParserError("Unexpected node %v", node))
+}
+
+func asValue(node *Node) sqltypes.Value {
+	switch node.Type {
 	case STRING:
 		return sqltypes.MakeString(node.Value)
 	case NUMBER:
