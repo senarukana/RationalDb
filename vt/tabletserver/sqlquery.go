@@ -5,8 +5,6 @@
 package tabletserver
 
 import (
-	"bytes"
-	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -16,7 +14,7 @@ import (
 	"github.com/senarukana/rationaldb/util/stats"
 	"github.com/senarukana/rationaldb/util/sync2"
 	"github.com/senarukana/rationaldb/util/tb"
-	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
+	eproto "github.com/senarukana/rationaldb/vt/kvengine/proto"
 	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
 
@@ -58,13 +56,12 @@ type SqlQuery struct {
 
 	qe        *QueryEngine
 	sessionId int64
-	dbconfig  *eproto.DBConfig
+	dbconfig  *eproto.DBConfigs
 }
 
 func NewSqlQuery(config Config) *SqlQuery {
 	sq := &SqlQuery{}
 	sq.qe = NewQueryEngine(config)
-	stats.PublishJSONFunc("Voltron", sq.statsJSON)
 	stats.Publish("TabletState", stats.IntFunc(sq.state.Get))
 	stats.Publish("TabletStateName", stats.StringFunc(sq.GetState))
 	return sq
@@ -142,7 +139,7 @@ func (sq *SqlQuery) checkState(sessionId int64) {
 	switch sq.state.Get() {
 	case NOT_SERVING:
 		panic(NewTabletError(RETRY, "not serving"))
-	case CONNECTING, ABORT, INITIALIZING:
+	case ABORT, INITIALIZING:
 		panic(NewTabletError(RETRY, "initalizing"))
 	case SHUTTING_DOWN:
 		panic(NewTabletError(RETRY, "unavailable"))
@@ -194,14 +191,15 @@ func handleExecError(query *proto.Query, err *error, logStats *sqlQueryStats) {
 		*err = terr
 		terr.RecordStats()
 		// suppress these errors in logs
-		if terr.ErrorType == RETRY || terr.ErrorType == TX_POOL_FULL || terr.SqlError == mysql.DUP_ENTRY {
-			return
-		}
+		// if terr.ErrorType == RETRY {
+		// 	return
+		// }
 		log.Error("%s: %v", terr.Message, query)
 	}
 }
 
-func (sq *SqlQuery) Execute(context *rpcproto.Context, query *proto.Query, reply *mproto.QueryResult) (err error) {
+func (sq *SqlQuery) Execute(context *rpcproto.Context, query *proto.Query, reply *eproto.QueryResult) (err error) {
+	log.Info("sql is %v", query.Sql)
 	logStats := newSqlQueryStats("Execute", context)
 	defer handleExecError(query, &err, logStats)
 
@@ -213,7 +211,7 @@ func (sq *SqlQuery) Execute(context *rpcproto.Context, query *proto.Query, reply
 
 // the first QueryResult will have Fields set (and Rows nil)
 // the subsequent QueryResult will have Rows set (and Fields nil)
-func (sq *SqlQuery) StreamExecute(context *rpcproto.Context, query *proto.Query, sendReply func(reply interface{}) error) (err error) {
+/*func (sq *SqlQuery) StreamExecute(context *rpcproto.Context, query *proto.Query, sendReply func(reply interface{}) error) (err error) {
 	logStats := newSqlQueryStats("StreamExecute", context)
 	defer handleExecError(query, &err, logStats)
 
@@ -234,7 +232,7 @@ func (sq *SqlQuery) StreamExecute(context *rpcproto.Context, query *proto.Query,
 		return sendReply(reply)
 	})
 	return nil
-}
+}*/
 
 /*func (sq *SqlQuery) ExecuteBatch(context *rpcproto.Context, queryList *proto.QueryList, reply *proto.QueryResultList) (err error) {
 	defer handleError(&err, nil)
@@ -299,7 +297,7 @@ func (sq *SqlQuery) StreamExecute(context *rpcproto.Context, query *proto.Query,
 	return nil
 }*/
 
-func (sq *SqlQuery) statsJSON() string {
+/*func (sq *SqlQuery) statsJSON() string {
 	buf := bytes.NewBuffer(make([]byte, 0, 128))
 	fmt.Fprintf(buf, "{")
 	fmt.Fprintf(buf, "\n \"State\": \"%v\",", stateName[sq.state.Get()])
@@ -308,7 +306,7 @@ func (sq *SqlQuery) statsJSON() string {
 	fmt.Fprintf(buf, "\n \"StreamBufferSize\": %v,", sq.qe.streamBufferSize.Get())
 	fmt.Fprintf(buf, "\n}")
 	return buf.String()
-}
+}*/
 
 func init() {
 	rand.Seed(time.Now().UnixNano())

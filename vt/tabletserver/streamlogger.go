@@ -120,7 +120,7 @@ func (stats *sqlQueryStats) FmtQuerySources() string {
 	}
 	sources := make([]string, 2)
 	n := 0
-	if stats.QuerySources&QUERY_SOURCE_MYSQL != 0 {
+	if stats.QuerySources&QUERY_SOURCE_DBENGINE != 0 {
 		sources[n] = "engine"
 		n++
 	}

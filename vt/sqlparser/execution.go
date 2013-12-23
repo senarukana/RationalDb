@@ -34,7 +34,6 @@ const (
 // Must exactly match order of plan constants.
 var planName = []string{
 	"PASS_SELECT",
-	"PASS_DML",
 	"PK_EQUAL",
 	"PK_IN",
 	"SELECT_SUBQUERY",
@@ -139,13 +138,17 @@ type ExecPlan struct {
 	// For PLAN_INSERT_SUBQUERY, columns to be inserted
 	ColumnNumbers []int
 
-	ColumnNames  []string
-	ColumnValues []interface{}
+<<<<<<< HEAD
+	// ColumnNames  []string
+	// ColumnValues []interface{}
 
-	columns_num int
+	// columns_num int
 	// Columns     map[string]interface{}
-	Columns []map[string]sqltypes.Value
+	// Columns []map[string]sqltypes.Value
 	// PKColumns map[string]interface{}
+=======
+	RowColumns []map[string]interface{}
+>>>>>>> 82fb25521ed88f97923b62f992bfe14df9e5ea6d
 
 	// PLAN_PK_EQUAL, PLAN_DML_PK: where clause values
 	// PLAN_PK_IN: IN clause values
@@ -373,27 +376,22 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 	tableName := string(node.At(INSERT_TABLE_OFFSET).Value)
 	tableInfo := plan.setTableInfo(tableName, getTable)
 
-	if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
-		log.Warningf("no primary key for table %s", tableName)
-		fmt.Println("no primary key for table %s", tableName)
-		plan.Reason = REASON_TABLE_NOINDEX
-		return plan
-	}
+<<<<<<< HEAD
+	// if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
+	// 	log.Warningf("no primary key for table %s", tableName)
+	// 	fmt.Println("no primary key for table %s", tableName)
+	// 	plan.Reason = REASON_TABLE_NOINDEX
+	// 	return plan
+	// }
 
+=======
+>>>>>>> 82fb25521ed88f97923b62f992bfe14df9e5ea6d
 	pkColumnNumbers := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertPKColumns(tableInfo)
 	fmt.Println("pkColumnNumbers: ", pkColumnNumbers)
 
 	// ColumnNames := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertColumns(tableInfo)
 	// plan.ColumnNames = ColumnNames
 	// fmt.Println("ColumnNames: ", plan.ColumnNames)
-
-	if node.At(INSERT_ON_DUP_OFFSET).Len() != 0 {
-		var ok bool
-		if plan.SecondaryPKValues, ok = node.At(INSERT_ON_DUP_OFFSET).At(0).execAnalyzeUpdateExpressions(tableInfo.Indexes[0]); !ok {
-			plan.Reason = REASON_PK_CHANGE
-			return plan
-		}
-	}
 
 	rowValues := node.At(INSERT_VALUES_OFFSET) // VALUES/SELECT
 	if rowValues.Type == SELECT {
@@ -424,11 +422,9 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 	// 	fmt.Println("ColumnValues: ", plan.ColumnValues)
 	// }
 
-	if Columns := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertColumnValue(tableInfo, rowList); Columns != nil {
-		plan.Columns = Columns
-
-		fmt.Println("Columns: ", plan.Columns)
-
+	if rowColumns := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertColumnValue(tableInfo, rowList); rowColumns != nil {
+		plan.RowColumns = rowColumns
+		log.Info("row column is %d", len(rowColumns))
 	}
 
 	plan.TableName = tableName
@@ -743,6 +739,7 @@ func (node *Node) execAnalyzeUpdateExpressions(pkIndex *schema.Index) (pkValues 
 //-----------------------------------------------
 // Insert
 
+<<<<<<< HEAD
 func (node *Node) getInsertPKColumns(tableInfo *schema.Table) (pkColumnNumbers []int) {
 	if node.Len() == 0 {
 		return tableInfo.PKColumns
@@ -766,6 +763,10 @@ func (node *Node) getInsertPKColumns(tableInfo *schema.Table) (pkColumnNumbers [
 
 func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (Columns []map[string]sqltypes.Value) {
 	Columns = make([]map[string]sqltypes.Value, len(node.Sub))
+=======
+func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (rowColumns []map[string]interface{}) {
+	rowColumns = make([]map[string]interface{}, len(node.Sub))
+>>>>>>> 82fb25521ed88f97923b62f992bfe14df9e5ea6d
 	// pkIndex := tableInfo.Indexes[0]
 	for i, column := range node.Sub {
 		// index := pkIndex.FindColumn(string(column.Value))
@@ -777,23 +778,30 @@ func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (
 			node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
 			value := node.execAnalyzeValue()
 			if value == nil {
-				log.Warningf("insert is too complex %v", node)
+				log.Warn("insert is too complex %v", node)
 				return nil
 			}
 			// values[j] = asInterface(value)
 			values[j] = asValue(value)
 		}
 		if len(values) == 1 {
+<<<<<<< HEAD
 			// m := map[string]sqltypes.Value
 			// m[column.Value] = values[0]
 			// Columns[i] = m
-			Columns[i] = map[string]sqltypes.Value{string(column.Value): values[0]}
+		// 	Columns[i] = map[string]sqltypes.Value{string(column.Value): values[0]}
+		// } else {
+		// 	fmt.Println("ValuesLen: ", len(values))
+			// Columns[i] = map[string]sqltypes.Value{string(column.Value): values}
+=======
+			rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values[0]}
 		} else {
 			fmt.Println("ValuesLen: ", len(values))
-			// Columns[i] = map[string]sqltypes.Value{string(column.Value): values}
+			rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values}
+>>>>>>> 82fb25521ed88f97923b62f992bfe14df9e5ea6d
 		}
 	}
-	return Columns
+	return rowColumns
 }
 
 // func (node *Node) getInsertColumns(tableInfo *schema.Table) (ColumnNames []string) {

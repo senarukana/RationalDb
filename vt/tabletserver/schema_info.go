@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -17,18 +16,17 @@ import (
 	"github.com/senarukana/rationaldb/schema"
 	"github.com/senarukana/rationaldb/sqltypes"
 	"github.com/senarukana/rationaldb/util/stats"
-	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
+	eproto "github.com/senarukana/rationaldb/vt/kvengine/proto"
 	"github.com/senarukana/rationaldb/vt/sqlparser"
-	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
 
 const maxTableCount = 10000
 
 type ExecPlan struct {
 	*sqlparser.ExecPlan
-	TableInfo *TableInfo
-	Fields    []eproto.Field
-	Rules     *QueryRules
+	Table  *schema.Table
+	Fields []eproto.Field
+	Rules  *QueryRules
 
 	mu         sync.Mutex
 	QueryCount int64
@@ -72,7 +70,7 @@ type SchemaOverride struct {
 
 type SchemaInfo struct {
 	mu             sync.Mutex
-	tables         map[string]*TableInfo
+	tables         map[string]*schema.Table
 	connPool       *ConnectionPool
 	queryCacheSize int
 	queries        *cache.LRUCache
@@ -101,18 +99,36 @@ func NewSchemaInfo(queryCacheSize int, idleTimeout time.Duration) *SchemaInfo {
 	return si
 }
 
-func (si *SchemaInfo) Open(connFactory proto.CreateKVEngineConnectionFunc) {
+func testTables() *schema.Table {
+	t := new(schema.Table)
+	t.Name = "user"
+	t.AddColumn("id", "int", sqltypes.NULL, "", true)
+	t.AddColumn("name", "string", sqltypes.NULL, "", false)
+
+	index := t.AddIndex("PRIMARY")
+	index.AddColumn("id", 0)
+
+	t.PKColumns = []int{0}
+	return t
+}
+
+func (si *SchemaInfo) Open(connFactory CreateConnectionFun) {
 	si.connPool.Open(connFactory)
 	conn := si.connPool.Get()
 	defer conn.Recycle()
-	tables, err := conn.ShowTables()
+	tables, err := getTables(conn)
 	if err != nil {
 		panic(NewTabletError(FATAL, "Could not get table list: %v", err))
+	} else {
+		log.Info("get table %d", len(tables))
+	}
+	if len(tables) == 0 {
+		tables = append(tables, testTables())
 	}
 
-	si.tables = make(map[string]*TableInfo, len(tables))
+	si.tables = make(map[string]*schema.Table)
 	for _, tableInfo := range tables {
-		si.tables[tableName] = tableInfo
+		si.tables[tableInfo.Name] = tableInfo
 	}
 	// Clear is not really needed. Doing it for good measure.
 	si.queries.Clear()
@@ -140,38 +156,38 @@ func (si *SchemaInfo) GetPlan(logStats *sqlQueryStats, sql string) (plan *ExecPl
 		return plan
 	}
 
-	var tableInfo *TableInfo
+	var tableInfo *schema.Table
 	GetTable := func(tableName string) (table *schema.Table, ok bool) {
 		tableInfo, ok = si.tables[tableName]
 		if !ok {
 			return nil, false
 		}
-		return tableInfo.Table, true
+		return tableInfo, true
 	}
 	splan, err := sqlparser.ExecParse(sql, GetTable)
 	if err != nil {
 		panic(NewTabletError(FAIL, "%s", err))
 	}
-	plan = &ExecPlan{ExecPlan: splan, TableInfo: tableInfo}
+	plan = &ExecPlan{ExecPlan: splan, Table: tableInfo}
 	// plan.Rules = si.rules.filterByPlan(sql, plan.PlanId)
-	if plan.PlanId.IsSelect() {
-		if plan.FieldQuery == nil {
-			log.Warn("Cannot cache field info: %s", sql)
-		} else {
-			sql := plan.FieldQuery.Query
-			//TODO
-			// r, err := si.executor(sql, 1, true)
-			logStats.QuerySources |= QUERY_SOURCE_MYSQL
-			logStats.NumberOfQueries += 1
-			logStats.AddRewrittenSql(sql)
-			if err != nil {
-				panic(NewTabletError(FAIL, "Error fetching fields: %v", err))
+	/*	if plan.PlanId.IsSelect() {
+			if plan.FieldQuery == nil {
+				log.Warn("Cannot cache field info: %s", sql)
+			} else {
+				sql := plan.FieldQuery.Query
+				//TODO
+				// r, err := si.executor(sql, 1, true)
+				logStats.QuerySources |= QUERY_SOURCE_DBENGINE
+				logStats.NumberOfQueries += 1
+				logStats.AddRewrittenSql(sql)
+				if err != nil {
+					panic(NewTabletError(FAIL, "Error fetching fields: %v", err))
+				}
+				plan.Fields = r.Fields
 			}
-			plan.Fields = r.Fields
-		}
-	} else if plan.PlanId == sqlparser.PLAN_DDL || plan.PlanId == sqlparser.PLAN_SET {
-		return plan
-	}
+		} else if plan.PlanId == sqlparser.PLAN_DDL || plan.PlanId == sqlparser.PLAN_SET {
+			return plan
+		}*/
 	si.queries.Set(sql, plan)
 	return plan
 }
@@ -199,7 +215,7 @@ func (si *SchemaInfo) GetRules() (qrs *QueryRules) {
 	return si.rules.Copy()
 }*/
 
-func (si *SchemaInfo) GetTable(tableName string) *TableInfo {
+func (si *SchemaInfo) GetTable(tableName string) *schema.Table {
 	si.mu.Lock()
 	defer si.mu.Unlock()
 	return si.tables[tableName]
@@ -324,14 +340,4 @@ func (si *SchemaInfo) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	} else {
 		response.WriteHeader(http.StatusNotFound)
 	}
-}
-
-func applyFieldFilter(columnNumbers []int, input []mproto.Field) (output []mproto.Field) {
-	output = make([]mproto.Field, len(columnNumbers))
-	for colIndex, colPointer := range columnNumbers {
-		if colPointer >= 0 {
-			output[colIndex] = input[colPointer]
-		}
-	}
-	return output
 }

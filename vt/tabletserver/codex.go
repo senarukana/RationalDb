@@ -7,18 +7,97 @@ package tabletserver
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/senarukana/rationaldb/log"
 	"github.com/senarukana/rationaldb/schema"
 	"github.com/senarukana/rationaldb/sqltypes"
+	eproto "github.com/senarukana/rationaldb/vt/kvengine/proto"
 )
+
+func buildPkValue(pkList []sqltypes.Value) (pk []byte) {
+	var buffer bytes.Buffer
+	for i, v := range pkList {
+		buffer.Write(v.Raw())
+		if i != len(pkList)-1 {
+			buffer.WriteByte('|')
+		}
+	}
+	return buffer.Bytes()
+}
+
+func buildTableyKey(tableName string) []byte {
+	return []byte(fmt.Sprintf("tables|%s", tableName))
+}
+
+func buildTableDescriptionKey(tableName string) []byte {
+	return []byte(fmt.Sprintf("tables|%s|description", tableName))
+}
+
+func buildTableIndexKey(tableName string) []byte {
+	return []byte(fmt.Sprintf("tables|%s|index", tableName))
+}
+
+func buildTablesKey() []byte {
+	return []byte(fmt.Sprintf("tables|"))
+}
+
+func buildTableRowColumnKey(tableName string, columnName string, pk []byte) []byte {
+	return []byte(fmt.Sprintf("%v|%v|%v", tableName, columnName, pk))
+}
+
+func getTables(conn PoolConnection) (tables []*schema.Table, err error) {
+	var cursor eproto.DbCursor
+	keyStart := buildTablesKey()
+	keyEnd := append(buildTablesKey(), '|')
+	cursor, err = conn.Iterate(nil, keyStart, keyEnd, 0)
+	if err != nil {
+		return nil, err
+	}
+	var tablesName [][]byte
+	for ; cursor.Valid(); cursor.Next() {
+		tablesName = append(tablesName, cursor.Value())
+	}
+	if err = cursor.Error(); err != nil {
+		return nil, err
+	}
+	if len(tablesName) == 0 {
+		return nil, nil
+	}
+	var tablesBytes [][]byte
+	tablesBytes, err = conn.Gets(nil, tablesName)
+	if err != nil {
+		return nil, err
+	}
+	tables = make([]*schema.Table, len(tablesBytes))
+	for _, tableBytes := range tablesBytes {
+		table := new(schema.Table)
+		err = json.Unmarshal(tableBytes, table)
+		if err != nil {
+			return nil, err
+		}
+		tables = append(tables, table)
+	}
+
+	return tables, err
+}
+
+func buildValue(bytes []byte, fieldType uint32) sqltypes.Value {
+	switch fieldType {
+	case schema.TYPE_FRACTIONAL:
+		return sqltypes.MakeFractional(bytes)
+	case schema.TYPE_NUMERIC:
+		return sqltypes.MakeNumeric(bytes)
+	}
+	return sqltypes.MakeString(bytes)
+}
 
 // buildValueList builds the set of PK reference rows used to drive the next query.
 // It uses the PK values supplied in the original query and bind variables.
 // The generated reference rows are validated for type match against the PK of the table.
-func buildValueList(tableInfo *TableInfo, pkValues []interface{}, bindVars map[string]interface{}) [][]sqltypes.Value {
+func buildValueList(tableInfo *schema.Table, pkValues []interface{}, bindVars map[string]interface{}) [][]sqltypes.Value {
 	length := -1
 	for _, pkValue := range pkValues {
 		if list, ok := pkValue.([]interface{}); ok {
@@ -51,7 +130,7 @@ func buildValueList(tableInfo *TableInfo, pkValues []interface{}, bindVars map[s
 // buildINValueList builds the set of PK reference rows used to drive the next query
 // using an IN clause. This works only for tables with no composite PK columns.
 // The generated reference rows are validated for type match against the PK of the table.
-func buildINValueList(tableInfo *TableInfo, pkValues []interface{}, bindVars map[string]interface{}) [][]sqltypes.Value {
+func buildINValueList(tableInfo *schema.Table, pkValues []interface{}, bindVars map[string]interface{}) [][]sqltypes.Value {
 	if len(tableInfo.PKColumns) != 1 {
 		panic("unexpected")
 	}
@@ -64,7 +143,7 @@ func buildINValueList(tableInfo *TableInfo, pkValues []interface{}, bindVars map
 }
 
 // buildSecondaryList is used for handling ON DUPLICATE DMLs, or those that change the PK.
-func buildSecondaryList(tableInfo *TableInfo, pkList [][]sqltypes.Value, secondaryList []interface{}, bindVars map[string]interface{}) [][]sqltypes.Value {
+func buildSecondaryList(tableInfo *schema.Table, pkList [][]sqltypes.Value, secondaryList []interface{}, bindVars map[string]interface{}) [][]sqltypes.Value {
 	if secondaryList == nil {
 		return nil
 	}
@@ -105,7 +184,7 @@ func resolveValue(col *schema.TableColumn, value interface{}, bindVars map[strin
 	return result
 }
 
-func validateRow(tableInfo *TableInfo, columnNumbers []int, row []sqltypes.Value) {
+func validateRow(tableInfo *schema.Table, columnNumbers []int, row []sqltypes.Value) {
 	if len(row) != len(columnNumbers) {
 		panic(NewTabletError(FAIL, "data inconsistency %d vs %d", len(row), len(columnNumbers)))
 	}
@@ -138,13 +217,13 @@ func buildKey(row []sqltypes.Value) (key string) {
 		}
 		pkValue.EncodeAscii(buf)
 		if i != len(row)-1 {
-			buf.WriteByte('|')
+			buf.WriteByte('.')
 		}
 	}
 	return buf.String()
 }
 
-func buildStreamComment(tableInfo *TableInfo, pkValueList [][]sqltypes.Value, secondaryList [][]sqltypes.Value) []byte {
+func buildStreamComment(tableInfo *schema.Table, pkValueList [][]sqltypes.Value, secondaryList [][]sqltypes.Value) []byte {
 	buf := bytes.NewBuffer(make([]byte, 0, 256))
 	fmt.Fprintf(buf, " /* _stream %s (", tableInfo.Name)
 	// We assume the first index exists, and is the pk
@@ -159,7 +238,7 @@ func buildStreamComment(tableInfo *TableInfo, pkValueList [][]sqltypes.Value, se
 	return buf.Bytes()
 }
 
-func buildPKValueList(buf *bytes.Buffer, tableInfo *TableInfo, pkValueList [][]sqltypes.Value) {
+func buildPKValueList(buf *bytes.Buffer, tableInfo *schema.Table, pkValueList [][]sqltypes.Value) {
 	for _, pkValues := range pkValueList {
 		buf.WriteString(" (")
 		for _, pkValue := range pkValues {
@@ -180,7 +259,7 @@ func applyFilter(columnNumbers []int, input []sqltypes.Value) (output []sqltypes
 	return output
 }
 
-func applyFilterWithPKDefaults(tableInfo *TableInfo, columnNumbers []int, input []sqltypes.Value) (output []sqltypes.Value) {
+func applyFilterWithPKDefaults(tableInfo *schema.Table, columnNumbers []int, input []sqltypes.Value) (output []sqltypes.Value) {
 	output = make([]sqltypes.Value, len(columnNumbers))
 	for colIndex, colPointer := range columnNumbers {
 		if colPointer >= 0 {
@@ -192,7 +271,7 @@ func applyFilterWithPKDefaults(tableInfo *TableInfo, columnNumbers []int, input 
 	return output
 }
 
-func validateKey(tableInfo *TableInfo, key string) (newKey string) {
+func validateKey(tableInfo *schema.Table, key string) (newKey string) {
 	if key == "" {
 		// TODO: Verify auto-increment table
 		return

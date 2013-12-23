@@ -7,7 +7,7 @@ package proto
 import (
 	"github.com/senarukana/rationaldb/rpcwrap"
 	rpcproto "github.com/senarukana/rationaldb/rpcwrap/proto"
-	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
+	eproto "github.com/senarukana/rationaldb/vt/kvengine/proto"
 )
 
 // defines the RPC services
@@ -23,7 +23,7 @@ type SqlQuery interface {
 	Rollback(context *rpcproto.Context, session *Session, noOutput *string) error
 
 	Execute(context *rpcproto.Context, query *Query, reply *eproto.QueryResult) error
-	StreamExecute(context *rpcproto.Context, query *Query, sendReply func(reply interface{}) error) error
+	// StreamExecute(context *rpcproto.Context, query *Query, sendReply func(reply interface{}) error) error
 	// ExecuteBatch(context *rpcproto.Context, queryList *QueryList, reply *QueryResultList) error
 }
 
