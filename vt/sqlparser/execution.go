@@ -265,6 +265,7 @@ func (node *Node) execAnalyzeSql(getTable TableGetter) (plan *ExecPlan) {
 	panic(NewParserError("Invalid SQL"))
 }
 
+
 func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 	// Default plan
 	plan = &ExecPlan{PlanId: PLAN_PASS_SELECT, FieldQuery: node.GenerateFieldQuery(), FullQuery: node.GenerateSelectLimitQuery()}
@@ -762,42 +763,58 @@ func (node *Node) getInsertPKColumns(tableInfo *schema.Table) (pkColumnNumbers [
 
 
 func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (rowColumns []map[string]sqltypes.Value) {
-	rowColumns = make([]map[string]sqltypes.Value, len(node.Sub))
+	
+	if len(node.Sub) > 0 {
+		rowColumns = make([]map[string]sqltypes.Value, len(node.Sub))
 
 	// pkIndex := tableInfo.Indexes[0]
-	for i, column := range node.Sub {
-		// index := pkIndex.FindColumn(string(column.Value))
-		// if index != -1 {
-		// 	continue
-		// }
-		values := make([]sqltypes.Value, rowList.Len())
-		for j := 0; j < rowList.Len(); j++ {
-			node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
-			value := node.execAnalyzeValue()
-			if value == nil {
-				log.Warn("insert is too complex %v", node)
-				return nil
+		for i, column := range node.Sub {
+
+			values := make([]sqltypes.Value, rowList.Len())
+			for j := 0; j < rowList.Len(); j++ {
+				node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
+				value := node.execAnalyzeValue()
+				if value == nil {
+					log.Warn("insert is too complex %v", node)
+					return nil
+				}
+				// values[j] = asInterface(value)
+				values[j] = asValue(value)
 			}
-			// values[j] = asInterface(value)
-			values[j] = asValue(value)
-		}
-		if len(values) == 1 {
-
-			// m := map[string]sqltypes.Value
-			// m[column.Value] = values[0]
-			// Columns[i] = m
-		// 	Columns[i] = map[string]sqltypes.Value{string(column.Value): values[0]}
-		// } else {
-		// 	fmt.Println("ValuesLen: ", len(values))
-			// Columns[i] = map[string]sqltypes.Value{string(column.Value): values}
-
-			rowColumns[i] = map[string]sqltypes.Value{string(column.Value):values[0]}
-		} else {
-			fmt.Println("ValuesLen: ", len(values))
-			// rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values}
-
+			if len(values) == 1 {
+				rowColumns[i] = map[string]sqltypes.Value{string(column.Value):values[0]}
+			} else {
+				fmt.Println("ValuesLen: ", len(values))
+				// rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values}
+			}
 		}
 	}
+	if len(node.Sub) == 0 {
+
+		tableColumns := tableInfo.Columns
+		rowColumns = make([]map[string]sqltypes.Value, len(tableColumns))
+		for i, column := range tableColumns {
+			values := make([]sqltypes.Value, rowList.Len())
+			for j := 0; j < rowList.Len(); j++ {
+				node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
+				value := node.execAnalyzeValue()
+				if value == nil {
+					log.Warningf("insert is too complex %v", node)
+					return nil
+				}
+				// values[j] = asInterface(value)
+				values[j] = asValue(value)
+			}
+			if len(values) == 1 {
+				rowColumns[i] = map[string]sqltypes.Value{string(column.Name): values[0]}
+			} else {
+				fmt.Println("ValuesLen: ", len(values))
+				// Columns[i] = map[string]sqltypes.Value{string(column.Value): values}
+			}
+		}
+
+	}
+	
 	return rowColumns
 }
 
