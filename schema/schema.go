@@ -3,6 +3,7 @@ package schema
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/senarukana/rationaldb/sqltypes"
 	"github.com/senarukana/rationaldb/util/jscfg"
@@ -49,30 +50,26 @@ func (self *Table) Json() string {
 }
 
 type TableColumn struct {
-	Name          string
-	Category      int
-	Type          int
-	Nullable      bool
-	Default       sqltypes.Value
-	IsPk          bool
-	IsAuto        bool
-	IncrementalID uint64
-	Mutex         *sync.Mutex
-	IsUUID        bool
+	Name     string
+	Category int
+	Type     int
+	Nullable bool
+	Default  sqltypes.Value
+	IsPk     bool
+	IsAuto   bool
+	NextId   int64
+	Mutex    *sync.Mutex
+	IsUUID   bool
 }
 
-func (self *TableColumn) GetNextIncrementalID() (ret uint64) {
+func (self *TableColumn) GetNextId() int64 {
 	if !self.IsAuto {
-		panic("GetIncrementalId error, this column is not auto increment")
+		panic("GetNextI error, this column is not auto increment")
 	}
-	self.Mutex.Lock()
-	ret = self.IncrementalID
-	self.IncrementalID++
-	self.Mutex.Unlock()
-	return
+	return atomic.AddInt64(&self.NextId, 1)
 }
 
-func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Value, extra string) {
+func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Value, extra string, isPk bool) {
 	index := len(self.Columns)
 	self.Columns = append(self.Columns, TableColumn{Name: name})
 	if strings.Contains(columnType, "int") {
@@ -82,13 +79,15 @@ func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Val
 	} else {
 		self.Columns[index].Category = CAT_OTHER
 	}
+
 	if extra == "auto_increment" {
 		self.Columns[index].IsAuto = true
 		self.Columns[index].Mutex = &sync.Mutex{}
-		self.Columns[index].IncrementalID = 0
+		self.Columns[index].NextId = 0
 		// Ignore default value, if any
 		return
 	}
+	self.Columns[index].IsPk = isPk
 
 	if defval.IsNull() {
 		return
@@ -109,8 +108,18 @@ func (ta *Table) FindColumn(name string) int {
 	return -1
 }
 
+func (ta *Table) GetPk() *TableColumn {
+	return &ta.Columns[0]
+}
+
 func (ta *Table) GetPKColumn(index int) *TableColumn {
 	return &ta.Columns[ta.PKColumns[index]]
+}
+
+func (ta *Table) AddIndex(name string) (index *Index) {
+	index = NewIndex(name)
+	ta.Indexes = append(ta.Indexes, index)
+	return index
 }
 
 type Index struct {

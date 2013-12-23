@@ -10,7 +10,6 @@ import (
 
 	"github.com/senarukana/rationaldb/util/pools"
 	"github.com/senarukana/rationaldb/util/stats"
-	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
 
 // ConnectionPool re-exposes ResourcePool as a pool of DBConnection objects
@@ -42,7 +41,7 @@ func (cp *ConnectionPool) pool() (p *pools.ResourcePool) {
 	return p
 }
 
-func (cp *ConnectionPool) Open(connFactory proto.CreateKVEngineConnectionFunc) {
+func (cp *ConnectionPool) Open(connFactory CreateConnectionFun) {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 	f := func() (pools.Resource, error) {
@@ -64,17 +63,17 @@ func (cp *ConnectionPool) Close() {
 	cp.mu.Unlock()
 }
 
-// You must call Recycle on the proto.KVExecutorPoolConnection once done.
-func (cp *ConnectionPool) Get() proto.KVExecutorPoolConnection {
+// You must call Recycle on the proto.PoolConnection once done.
+func (cp *ConnectionPool) Get() PoolConnection {
 	r, err := cp.pool().Get()
 	if err != nil {
-		panic(NewTabletErrorSql(FATAL, err))
+		panic(NewTabletErrorDB(FATAL, err))
 	}
 	return r.(*pooledConnection)
 }
 
-// You must call Recycle on the proto.KVExecutorPoolConnection once done.
-func (cp *ConnectionPool) SafeGet() (proto.KVExecutorPoolConnection, error) {
+// You must call Recycle on the proto.PoolConnection once done.
+func (cp *ConnectionPool) SafeGet() (PoolConnection, error) {
 	r, err := cp.pool().Get()
 	if err != nil {
 		return nil, err
@@ -82,11 +81,11 @@ func (cp *ConnectionPool) SafeGet() (proto.KVExecutorPoolConnection, error) {
 	return r.(*pooledConnection), nil
 }
 
-// You must call Recycle on the proto.KVExecutorPoolConnection once done.
-func (cp *ConnectionPool) TryGet() proto.KVExecutorPoolConnection {
+// You must call Recycle on the PoolConnection once done.
+func (cp *ConnectionPool) TryGet() PoolConnection {
 	r, err := cp.pool().TryGet()
 	if err != nil {
-		panic(NewTabletErrorSql(FATAL, err))
+		panic(NewTabletErrorDB(FATAL, err))
 	}
 	if r == nil {
 		return nil
@@ -94,7 +93,7 @@ func (cp *ConnectionPool) TryGet() proto.KVExecutorPoolConnection {
 	return r.(*pooledConnection)
 }
 
-func (cp *ConnectionPool) Put(conn proto.KVExecutorPoolConnection) {
+func (cp *ConnectionPool) Put(conn PoolConnection) {
 	cp.pool().Put(conn)
 }
 
@@ -144,9 +143,9 @@ func (cp *ConnectionPool) IdleTimeout() time.Duration {
 	return cp.pool().IdleTimeout()
 }
 
-// pooledConnection re-exposes DBConnection as a proto.KVExecutorPoolConnection
+// pooledConnection re-exposes DBConnection as a proto.PoolConnection
 type pooledConnection struct {
-	proto.KVExecutorPoolConnection
+	*DBConnection
 	pool *ConnectionPool
 }
 

@@ -28,7 +28,7 @@ func NewTabletError(errorType int, format string, args ...interface{}) *TabletEr
 	return &TabletError{errorType, fmt.Sprintf(format, args...)}
 }
 
-func NewTabletErrorSql(errorType int, err error) *TabletError {
+func NewTabletErrorDB(errorType int, err error) *TabletError {
 	te := NewTabletError(errorType, "%s", err)
 	return te
 }
@@ -40,10 +40,6 @@ func (te *TabletError) Error() string {
 		format = "retry: %s"
 	case FATAL:
 		format = "fatal: %s"
-	case TX_POOL_FULL:
-		format = "tx_pool_full: %s"
-	case NOT_IN_TX:
-		format = "not_in_tx: %s"
 	}
 	return fmt.Sprintf(format, te.Message)
 }
@@ -54,10 +50,6 @@ func (te *TabletError) RecordStats() {
 		errorStats.Add("Retry", 1)
 	case FATAL:
 		errorStats.Add("Fatal", 1)
-	case TX_POOL_FULL:
-		errorStats.Add("TxPoolFull", 1)
-	case NOT_IN_TX:
-		errorStats.Add("NotInTx", 1)
 	}
 }
 

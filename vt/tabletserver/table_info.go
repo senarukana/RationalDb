@@ -4,10 +4,9 @@
 
 package tabletserver
 
-import (
+/*import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/senarukana/rationaldb/log"
 	"github.com/senarukana/rationaldb/schema"
@@ -114,4 +113,4 @@ func (ti *TableInfo) fetchIndexes(conn PoolConnection) bool {
 		ti.Indexes[i].DataColumns = pkIndex.Columns
 	}
 	return true
-}
+}*/

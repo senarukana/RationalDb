@@ -10,7 +10,7 @@ import (
 
 	"github.com/senarukana/rationaldb/log"
 	rpcproto "github.com/senarukana/rationaldb/rpcwrap/proto"
-	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
+	eproto "github.com/senarukana/rationaldb/vt/kvengine/proto"
 	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
 
@@ -22,10 +22,11 @@ var (
 
 func init() {
 	flag.StringVar(&qsConfig.EngineName, "queryserver-config-engine-name", DefaultQsConfig.EngineName, "default query server engine name")
+	flag.IntVar(&qsConfig.PoolSize, "queryserver-config-pool-size", DefaultQsConfig.PoolSize, "query server pool size")
 	flag.IntVar(&qsConfig.MaxResultSize, "queryserver-config-max-result-size", DefaultQsConfig.MaxResultSize, "query server max result size")
 	flag.IntVar(&qsConfig.StreamBufferSize, "queryserver-config-stream-buffer-size", DefaultQsConfig.StreamBufferSize, "query server stream buffer size")
 	flag.IntVar(&qsConfig.QueryCacheSize, "queryserver-config-query-cache-size", DefaultQsConfig.QueryCacheSize, "query server query cache size")
-	flag.Float64Var(&qsConfig.SpotCheckRatio, "queryserver-config-spot-check-ratio", DefaultQsConfig.SpotCheckRatio, "query server rowcache spot check frequency")
+	flag.Float64Var(&qsConfig.IdleTimeout, "queryserver-config-idle-timeout", DefaultQsConfig.IdleTimeout, "query server idle timeout")
 	flag.IntVar(&qsConfig.StreamExecThrottle, "queryserver-config-stream-exec-throttle", DefaultQsConfig.StreamExecThrottle, "Maximum number of simultaneous streaming requests that can wait for results")
 }
 
@@ -77,7 +78,7 @@ func RegisterQueryService() {
 
 // AllowQueries can take an indefinite amount of time to return because
 // it keeps retrying until it obtains a valid connection to the database.
-func AllowQueries(dbconfig *eproto.DBConfig) {
+func AllowQueries(dbconfig *eproto.DBConfigs) {
 	defer logError()
 	SqlQueryRpcService.allowQueries(dbconfig)
 }
@@ -101,7 +102,7 @@ func IsHealthy() error {
 	return SqlQueryRpcService.Execute(
 		new(rpcproto.Context),
 		&proto.Query{Sql: "get test", SessionId: SqlQueryRpcService.sessionId},
-		new(mproto.QueryResult),
+		new(eproto.QueryResult),
 	)
 }
 
