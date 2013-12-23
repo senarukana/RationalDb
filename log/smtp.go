@@ -1,6 +1,6 @@
 package log
 
-import (
+/*import (
 	"fmt"
 	"github.com/senarukana/dldb/conf"
 	"net/smtp"
@@ -60,3 +60,4 @@ func (self *SmtpLogWriter) Destroy() {}
 func init() {
 	Register("smtp", NewSmtpLogWriter)
 }
+*/

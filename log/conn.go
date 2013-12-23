@@ -10,8 +10,7 @@ package log
 	port = 3080
 */
 
-import (
-	"github.com/senarukana/dldb/conf"
+/*import (
 	"io"
 	syslog "log"
 	"net"
@@ -43,9 +42,6 @@ func NewConnLog() LoggerInterface {
 }
 
 func (self *ConnLogWriter) Init(conf *conf.LogConfiguration) error {
-	/*	if rc, err := conf.GetBool(sectionName, "reconnect"); err == nil {
-		self.reconnect = rc
-	}*/
 	self.level = conf.RemoteConnLogConfiguration.Level
 	self.maxRetries = conf.RemoteConnLogConfiguration.MaxRetries
 	self.addr = conf.RemoteConnLogConfiguration.Host
@@ -105,3 +101,4 @@ func (self *ConnLogWriter) connect() error {
 func init() {
 	Register("conn", NewConnLog)
 }
+*/

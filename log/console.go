@@ -1,7 +1,6 @@
 package log
 
 import (
-	"github.com/senarukana/dldb/conf"
 	syslog "log"
 	"os"
 )
@@ -18,12 +17,7 @@ func NewConsoleLogWriter() LoggerInterface {
 	return cw
 }
 
-func (self *ConsoleLogWriter) Init(conf *conf.LogConfiguration) error {
-	if conf == nil {
-		return nil
-	}
-	//read from conf file
-	self.level = conf.ConsoleLogConfiguration.Level
+func (self *ConsoleLogWriter) Init() error {
 	return nil
 }
 

@@ -1,6 +1,6 @@
 package log
 
-import (
+/*import (
 	"fmt"
 	"github.com/senarukana/dldb/conf"
 	syslog "log"
@@ -204,3 +204,4 @@ func (self *FileLogWriter) Destroy() {
 func init() {
 	Register("file", NewFileWriter)
 }
+*/
