@@ -147,7 +147,7 @@ type ExecPlan struct {
 	// Columns []map[string]sqltypes.Value
 	// PKColumns map[string]interface{}
 
-	RowColumns []map[string]interface{}
+	RowColumns []map[string]sqltypes.Value
 
 
 	// PLAN_PK_EQUAL, PLAN_DML_PK: where clause values
@@ -760,11 +760,9 @@ func (node *Node) getInsertPKColumns(tableInfo *schema.Table) (pkColumnNumbers [
 	return pkColumnNumbers
 }
 
-func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (Columns []map[string]sqltypes.Value) {
-	Columns = make([]map[string]sqltypes.Value, len(node.Sub))
 
-func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (rowColumns []map[string]interface{}) {
-	rowColumns = make([]map[string]interface{}, len(node.Sub))
+func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (rowColumns []map[string]sqltypes.Value) {
+	rowColumns = make([]map[string]sqltypes.Value, len(node.Sub))
 
 	// pkIndex := tableInfo.Indexes[0]
 	for i, column := range node.Sub {
@@ -793,10 +791,10 @@ func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (
 		// 	fmt.Println("ValuesLen: ", len(values))
 			// Columns[i] = map[string]sqltypes.Value{string(column.Value): values}
 
-			rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values[0]}
+			rowColumns[i] = map[string]sqltypes.Value{string(column.Value):values[0]}
 		} else {
 			fmt.Println("ValuesLen: ", len(values))
-			rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values}
+			// rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values}
 
 		}
 	}
