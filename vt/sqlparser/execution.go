@@ -138,7 +138,7 @@ type ExecPlan struct {
 	// For PLAN_INSERT_SUBQUERY, columns to be inserted
 	ColumnNumbers []int
 
-<<<<<<< HEAD
+
 	// ColumnNames  []string
 	// ColumnValues []interface{}
 
@@ -146,9 +146,9 @@ type ExecPlan struct {
 	// Columns     map[string]interface{}
 	// Columns []map[string]sqltypes.Value
 	// PKColumns map[string]interface{}
-=======
+
 	RowColumns []map[string]interface{}
->>>>>>> 82fb25521ed88f97923b62f992bfe14df9e5ea6d
+
 
 	// PLAN_PK_EQUAL, PLAN_DML_PK: where clause values
 	// PLAN_PK_IN: IN clause values
@@ -376,7 +376,7 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 	tableName := string(node.At(INSERT_TABLE_OFFSET).Value)
 	tableInfo := plan.setTableInfo(tableName, getTable)
 
-<<<<<<< HEAD
+
 	// if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
 	// 	log.Warningf("no primary key for table %s", tableName)
 	// 	fmt.Println("no primary key for table %s", tableName)
@@ -384,8 +384,7 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 	// 	return plan
 	// }
 
-=======
->>>>>>> 82fb25521ed88f97923b62f992bfe14df9e5ea6d
+
 	pkColumnNumbers := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertPKColumns(tableInfo)
 	fmt.Println("pkColumnNumbers: ", pkColumnNumbers)
 
@@ -763,10 +762,10 @@ func (node *Node) getInsertPKColumns(tableInfo *schema.Table) (pkColumnNumbers [
 
 func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (Columns []map[string]sqltypes.Value) {
 	Columns = make([]map[string]sqltypes.Value, len(node.Sub))
-=======
+
 func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (rowColumns []map[string]interface{}) {
 	rowColumns = make([]map[string]interface{}, len(node.Sub))
->>>>>>> 82fb25521ed88f97923b62f992bfe14df9e5ea6d
+
 	// pkIndex := tableInfo.Indexes[0]
 	for i, column := range node.Sub {
 		// index := pkIndex.FindColumn(string(column.Value))
@@ -785,7 +784,7 @@ func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (
 			values[j] = asValue(value)
 		}
 		if len(values) == 1 {
-<<<<<<< HEAD
+
 			// m := map[string]sqltypes.Value
 			// m[column.Value] = values[0]
 			// Columns[i] = m
@@ -793,12 +792,12 @@ func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (
 		// } else {
 		// 	fmt.Println("ValuesLen: ", len(values))
 			// Columns[i] = map[string]sqltypes.Value{string(column.Value): values}
-=======
+
 			rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values[0]}
 		} else {
 			fmt.Println("ValuesLen: ", len(values))
 			rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values}
->>>>>>> 82fb25521ed88f97923b62f992bfe14df9e5ea6d
+
 		}
 	}
 	return rowColumns
