@@ -5,11 +5,11 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"time"
 
 	"github.com/senarukana/rationaldb/log"
+	"github.com/senarukana/rationaldb/vt/kvengine/proto"
 	"github.com/senarukana/rationaldb/vt/servenv"
 	ts "github.com/senarukana/rationaldb/vt/tabletserver"
 )
@@ -24,7 +24,9 @@ func main() {
 
 	ts.InitQueryService()
 
-	ts.AllowQueries()
+	dbConfigs := &proto.DBConfigs{DataPath: "testrock"}
+	dbConfigs.AppConnectParams = &proto.DbConnectParams{DbName: "test", UserName: "li"}
+	ts.AllowQueries(dbConfigs)
 
 	log.Info("starting vtocc %v", *port)
 	servenv.OnClose(func() {

@@ -5,7 +5,7 @@
 package proto
 
 import (
-	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
+	eproto "github.com/senarukana/rationaldb/vt/kvengine/proto"
 )
 
 type SessionParams struct {

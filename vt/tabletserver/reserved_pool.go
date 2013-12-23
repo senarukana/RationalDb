@@ -10,13 +10,12 @@ import (
 	"github.com/senarukana/rationaldb/util/pools"
 	"github.com/senarukana/rationaldb/util/stats"
 	"github.com/senarukana/rationaldb/util/sync2"
-	"github.com/senarukana/rationaldb/vt/tabletserver/proto"
 )
 
 type ReservedPool struct {
 	pool        *pools.Numbered
 	lastId      sync2.AtomicInt64
-	connFactory proto.CreateKVExecutorFunc
+	connFactory CreateConnectionFun
 }
 
 func NewReservedPool(name string) *ReservedPool {
@@ -25,7 +24,7 @@ func NewReservedPool(name string) *ReservedPool {
 	return rp
 }
 
-func (rp *ReservedPool) Open(connFactory proto.CreateKVExecutorFunc) {
+func (rp *ReservedPool) Open(connFactory CreateConnectionFun) {
 	rp.connFactory = connFactory
 }
 
@@ -40,10 +39,10 @@ func (rp *ReservedPool) Close() {
 func (rp *ReservedPool) CreateConnection() (connectionId int64) {
 	conn, err := rp.connFactory()
 	if err != nil {
-		panic(NewTabletErrorSql(FATAL, err))
+		panic(NewTabletErrorDB(FATAL, err))
 	}
 	connectionId = rp.lastId.Add(1)
-	rconn := &reservedConnection{proto.KVExecutorPoolConnection: conn, connectionId: connectionId, pool: rp}
+	rconn := &reservedConnection{DBConnection: conn, connectionId: connectionId, pool: rp}
 	rp.pool.Register(connectionId, rconn)
 	return connectionId
 }
@@ -68,7 +67,7 @@ func (rp *ReservedPool) StatsJSON() string {
 }
 
 type reservedConnection struct {
-	*KVExecutorPoolConnection
+	*DBConnection
 	connectionId int64
 	pool         *ReservedPool
 	inUse        bool

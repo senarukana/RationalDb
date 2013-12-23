@@ -12,7 +12,7 @@ import (
 
 	"github.com/senarukana/rationaldb/util/bson"
 	"github.com/senarukana/rationaldb/util/bytes2"
-	eproto "github.com/senarukana/rationaldb/vt/engine/proto"
+	eproto "github.com/senarukana/rationaldb/vt/kvengine/proto"
 )
 
 func (query *Query) MarshalBson(buf *bytes2.ChunkedWriter) {
