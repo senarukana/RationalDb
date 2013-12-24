@@ -87,6 +87,7 @@ func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Val
 		// Ignore default value, if any
 		return
 	}
+	// isPk := true
 	self.Columns[index].IsPk = isPk
 
 	if defval.IsNull() {

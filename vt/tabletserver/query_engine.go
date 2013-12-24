@@ -247,12 +247,12 @@ func (qe *QueryEngine) execInsertPK(logStats *sqlQueryStats, conn PoolConnection
 						panic(NewTabletErrorDB(FAIL, fmt.Errorf("column %s shouldn't be null", columnDef.Name)))
 					}
 				}
-				if !value.(sqltypes.Value).IsNull() {
+				if !value.IsNull() {
 					key = buildTableRowColumnKey(tableName, columnName, pkvalue)
 					log.Info("normal key is %v", string(key))
 					keys = append(keys, key)
-					values = append(values, value.(sqltypes.Value).Raw())
-					log.Info("normal value is %v", value.(sqltypes.Value).String())
+					values = append(values, value.Raw())
+					log.Info("normal value is %v", value.String())
 				}
 			}
 		}

@@ -100,16 +100,74 @@ func NewSchemaInfo(queryCacheSize int, idleTimeout time.Duration) *SchemaInfo {
 }
 
 func testTables() *schema.Table {
-	t := new(schema.Table)
-	t.Name = "user"
-	t.AddColumn("id", "int", sqltypes.NULL, "", true)
-	t.AddColumn("name", "string", sqltypes.NULL, "", false)
+	// t := new(schema.Table)
+	// t.Name = "user"
+	// t.AddColumn("id", "int(11)", sqltypes.NULL, "", true)
+	// t.AddColumn("name", "varchar(255)", sqltypes.NULL, "", false)
 
-	index := t.AddIndex("PRIMARY")
-	index.AddColumn("id", 0)
+	// index := t.AddIndex("PRIMARY")
+	// index.AddColumn("id", 0)
 
-	t.PKColumns = []int{0}
-	return t
+	// t.PKColumns = []int{0}
+	var schem map[string]*schema.Table
+	schem = make(map[string]*schema.Table)
+	var (
+		SQLZERO = sqltypes.MakeString([]byte("0"))
+	)
+
+	a := schema.NewTable("a")
+	a.AddColumn("eid", "int", SQLZERO, "", true)
+	a.AddColumn("id", "int", SQLZERO, "", true)
+	a.AddColumn("name", "varchar(10)", SQLZERO, "", false)
+	a.AddColumn("foo", "varchar(10)", SQLZERO, "", false)
+	acolumns := []string{"eid", "id", "name", "foo"}
+	a.Indexes = append(a.Indexes, &schema.Index{Name: "PRIMARY", Columns: []string{"eid", "id"}, Cardinality: []uint64{1, 1}, DataColumns: acolumns})
+	a.Indexes = append(a.Indexes, &schema.Index{Name: "a_name", Columns: []string{"eid", "name"}, Cardinality: []uint64{1, 1}, DataColumns: a.Indexes[0].Columns})
+	a.Indexes = append(a.Indexes, &schema.Index{Name: "b_name", Columns: []string{"name"}, Cardinality: []uint64{3}, DataColumns: a.Indexes[0].Columns})
+	a.Indexes = append(a.Indexes, &schema.Index{Name: "c_name", Columns: []string{"name"}, Cardinality: []uint64{2}, DataColumns: a.Indexes[0].Columns})
+	a.PKColumns = append(a.PKColumns, 0, 1)
+	a.CacheType = schema.CACHE_RW
+	schem["a"] = a
+
+	// b := schema.NewTable("b")
+	// b.AddColumn("eid", "int", SQLZERO, "")
+	// b.AddColumn("id", "int", SQLZERO, "")
+	// bcolumns := []string{"eid", "id"}
+	// b.Indexes = append(a.Indexes, &schema.Index{Name: "PRIMARY", Columns: []string{"eid", "id"}, Cardinality: []uint64{1, 1}, DataColumns: bcolumns})
+	// b.PKColumns = append(a.PKColumns, 0, 1)
+	// b.CacheType = schema.CACHE_NONE
+	// schem["b"] = b
+
+	// c := schema.NewTable("c")
+	// c.AddColumn("eid", "int", SQLZERO, "")
+	// c.AddColumn("id", "int", SQLZERO, "")
+	// c.CacheType = schema.CACHE_NONE
+	// schem["c"] = c
+
+	// d := schema.NewTable("d")
+	// d.AddColumn("name", "varbinary(10)", SQLZERO, "")
+	// d.AddColumn("id", "int", SQLZERO, "")
+	// d.AddColumn("foo", "varchar(10)", SQLZERO, "")
+	// d.AddColumn("bar", "varchar(10)", SQLZERO, "")
+	// dcolumns := []string{"name"}
+	// d.Indexes = append(d.Indexes, &schema.Index{Name: "PRIMARY", Columns: []string{"name"}, Cardinality: []uint64{1}, DataColumns: dcolumns})
+	// d.Indexes = append(d.Indexes, &schema.Index{Name: "d_id", Columns: []string{"id"}, Cardinality: []uint64{1}, DataColumns: d.Indexes[0].Columns})
+	// d.Indexes = append(d.Indexes, &schema.Index{Name: "d_bar_never", Columns: []string{"bar", "foo"}, Cardinality: []uint64{2, 1}, DataColumns: d.Indexes[0].Columns})
+	// d.Indexes = append(d.Indexes, &schema.Index{Name: "d_bar", Columns: []string{"bar", "foo"}, Cardinality: []uint64{3, 1}, DataColumns: d.Indexes[0].Columns})
+	// d.PKColumns = append(d.PKColumns, 0)
+	// d.CacheType = schema.CACHE_RW
+	// schem["d"] = d
+
+	// e := schema.NewTable("e")
+	// e.AddColumn("eid", "int", SQLZERO, "")
+	// e.AddColumn("id", "int", SQLZERO, "")
+	// ecolumns := []string{"eid", "id"}
+	// e.Indexes = append(e.Indexes, &schema.Index{Name: "PRIMARY", Columns: []string{"eid", "id"}, Cardinality: []uint64{1, 1}, DataColumns: ecolumns})
+	// e.PKColumns = append(a.PKColumns, 0, 1)
+	// e.CacheType = schema.CACHE_W
+	// schem["e"] = e
+
+	return a
 }
 
 func (si *SchemaInfo) Open(connFactory CreateConnectionFun) {
@@ -150,6 +208,7 @@ func (si *SchemaInfo) DropTable(tableName string) {
 }
 
 func (si *SchemaInfo) GetPlan(logStats *sqlQueryStats, sql string) (plan *ExecPlan) {
+	log.Warn("plan sql ", sql)
 	si.mu.Lock()
 	defer si.mu.Unlock()
 	if plan := si.getQuery(sql); plan != nil {
