@@ -199,7 +199,7 @@ func handleExecError(query *proto.Query, err *error, logStats *sqlQueryStats) {
 }
 
 func (sq *SqlQuery) Execute(context *rpcproto.Context, query *proto.Query, reply *eproto.QueryResult) (err error) {
-	log.Info("sql is %v", query.Sql)
+	// log.Info("sql is %v", query.Sql)
 	logStats := newSqlQueryStats("Execute", context)
 	defer handleExecError(query, &err, logStats)
 

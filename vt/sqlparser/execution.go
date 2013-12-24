@@ -137,7 +137,7 @@ type ExecPlan struct {
 	// For PLAN_INSERT_SUBQUERY, columns to be inserted
 	ColumnNumbers []int
 
-	RowColumns []map[string]interface{}
+	RowColumns []map[string]sqltypes.Value
 
 	// PLAN_PK_EQUAL, PLAN_DML_PK: where clause values
 	// PLAN_PK_IN: IN clause values
@@ -168,6 +168,10 @@ func ExecParse(sql string, getTable TableGetter) (plan *ExecPlan, err error) {
 	defer handleError(&err)
 
 	tree, err := Parse(sql)
+
+	log.Info("tree: %v", tree.Type)
+	log.Info("%v", tree.TreeString())
+
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +229,7 @@ func DDLParse(sql string) (plan *DDLPlan) {
 // Implementation
 
 func (node *Node) execAnalyzeSql(getTable TableGetter) (plan *ExecPlan) {
+	log.Warn("TYPE IS", node.Type)
 	switch node.Type {
 	case SELECT, UNION, UNION_ALL, MINUS, EXCEPT, INTERSECT:
 		return node.execAnalyzeSelect(getTable)
@@ -383,7 +388,6 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 		plan.RowColumns = rowColumns
 		log.Info("row column is %d", len(rowColumns))
 	}
-
 	return plan
 }
 
@@ -644,6 +648,7 @@ func (node *Node) execAnalyzeID() *Node {
 }
 
 func (node *Node) execAnalyzeValue() *Node {
+	log.Info("node.Type %v", node.Type)
 	switch node.Type {
 	case STRING, NUMBER, VALUE_ARG:
 		return node
@@ -694,31 +699,75 @@ func (node *Node) execAnalyzeUpdateExpressions(pkIndex *schema.Index) (pkValues 
 //-----------------------------------------------
 // Insert
 
-func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (rowColumns []map[string]interface{}) {
-	rowColumns = make([]map[string]interface{}, len(node.Sub))
-	// pkIndex := tableInfo.Indexes[0]
-	for i, column := range node.Sub {
-		// index := pkIndex.FindColumn(string(column.Value))
-		// if index != -1 {
-		// 	continue
-		// }
-		values := make([]interface{}, rowList.Len())
-		for j := 0; j < rowList.Len(); j++ {
-			node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
-			value := node.execAnalyzeValue()
-			if value == nil {
-				log.Warn("insert is too complex %v", node)
-				return nil
+func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (rowColumns []map[string]sqltypes.Value) {
+	log.Warn("node.Sub is ", len(node.Sub))
+	if len(node.Sub) > 0 {
+		rowLen := len(node.Sub)
+		rowColumns = make([]map[string]sqltypes.Value, rowLen)
+	} else {
+		rowLen := rowList.Len()
+		rowColumns = make([]map[string]sqltypes.Value, rowLen)
+	}
+
+	for i := 0; i < rowList.Len(); i++ {
+		rowColumns[i] = make(map[string]sqltypes.Value)
+	}
+	if len(node.Sub) > 0 {
+
+		// pkIndex := tableInfo.Indexes[0]
+		for i, column := range node.Sub {
+			// index := pkIndex.FindColumn(string(column.Value))
+			// if index != -1 {
+			// 	continue
+			// }
+			values := make([]sqltypes.Value, rowList.Len())
+			for j := 0; j < rowList.Len(); j++ {
+				node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
+				value := node.execAnalyzeValue()
+				if value == nil {
+					log.Warn("insert is too complex %v", node)
+					return nil
+				}
+				// values[j] = asInterface(value)
+				values[j] = asValue(value)
+				rowColumns[j][string(column.Value)] = values[j]
 			}
-			values[j] = asInterface(value)
-		}
-		if len(values) == 1 {
-			rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values[0]}
-		} else {
-			fmt.Println("ValuesLen: ", len(values))
-			rowColumns[i] = map[string]interface{}{"name": string(column.Value), "value": values}
+			// if len(values) == 1 {
+			// 	rowColumns = map[string]sqltypes.Value{string(column.Value): values[0]}
+			// } else {
+			// 	fmt.Println("ValuesLen: ", len(values))
+			// 	// rowColumns[i] = map[string]sqltypes.Value{"name": string(column.Value), "value": values}
+			// }
 		}
 	}
+
+	if len(node.Sub) == 0 {
+
+		tableColumns := tableInfo.Columns
+		log.Info("tableColumns %v", tableColumns)
+		for i := 0; i < len(tableColumns); i++ {
+			column := tableColumns[i]
+			values := make([]sqltypes.Value, rowList.Len())
+			log.Info("values len %v", len(values))
+			for j := 0; j < rowList.Len(); j++ {
+				log.Info("j : %v", j)
+				log.Info("i : %v", i)
+				node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
+				value := node.execAnalyzeValue()
+				log.Info("value is %v", value)
+				if value == nil {
+					// log.Warningf("insert is too complex %v", node)
+					return nil
+				}
+				// values[j] = asInterface(value)
+				values[j] = asValue(value)
+				rowColumns[j][column.Name] = values[j]
+				log.Info("values[j] %v", values[j])
+			}
+
+		}
+	}
+	log.Info("rowColumns is ", rowColumns)
 	return rowColumns
 }
 
@@ -1102,6 +1151,20 @@ func asInterface(node *Node) interface{} {
 	switch node.Type {
 	case VALUE_ARG:
 		return string(node.Value)
+	case STRING:
+		return sqltypes.MakeString(node.Value)
+	case NUMBER:
+		n, err := sqltypes.BuildNumeric(string(node.Value))
+		if err != nil {
+			panic(NewParserError("Type mismatch: %s", err))
+		}
+		return n
+	}
+	panic(NewParserError("Unexpected node %v", node))
+}
+
+func asValue(node *Node) sqltypes.Value {
+	switch node.Type {
 	case STRING:
 		return sqltypes.MakeString(node.Value)
 	case NUMBER:
