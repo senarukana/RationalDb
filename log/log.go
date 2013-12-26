@@ -17,7 +17,7 @@ const (
 type loggerType func() LoggerInterface
 
 type LoggerInterface interface {
-	Init() error
+	Init(interface{}) error
 	WriteMsg(msg string, level int) error
 	Destroy()
 }
@@ -64,12 +64,14 @@ func Register(logtype string, log loggerType) {
 // set different log type
 // now it supports: file, conn, smtp
 // you can set multiple logger at the same time
-func SetLogger(logName string) error {
+func SetLogger(logName string, conf interface{}) error {
 	logger.lock.Lock()
 	defer logger.lock.Unlock()
 	if log, ok := logAdapters[logName]; ok {
 		lg := log()
-		lg.Init()
+		if err := lg.Init(conf); err != nil {
+			panic(fmt.Errorf("Init log %v error, %v", logName, err))
+		}
 		logger.outputs[logName] = lg
 		return nil
 	} else {
@@ -153,6 +155,9 @@ func Close() {
 }
 
 func init() {
+	Register("console", NewConsoleLogWriter)
+	Register("file", NewFileWriter)
 	logger = NewLogger(100000)
-	SetLogger("console")
+	SetLogger("console", nil)
+	SetLogger("file", nil)
 }

@@ -17,15 +17,8 @@ import (
 	eproto "github.com/senarukana/rationaldb/vt/kvengine/proto"
 )
 
-func buildPkValue(pkList []sqltypes.Value) (pk []byte) {
-	var buffer bytes.Buffer
-	for i, v := range pkList {
-		buffer.Write(v.Raw())
-		if i != len(pkList)-1 {
-			buffer.WriteByte('|')
-		}
-	}
-	return buffer.Bytes()
+func buildTableColumnAutoKey(tableName string, columnName string) []byte {
+	return []byte(fmt.Sprintf("autoid|%s|%s|", tableName, columnName))
 }
 
 func buildTableyKey(tableName string) []byte {
@@ -84,14 +77,25 @@ func getTables(conn PoolConnection) (tables []*schema.Table, err error) {
 	return tables, err
 }
 
-func buildValue(bytes []byte, fieldType uint32) sqltypes.Value {
+func buildValue(bytes []byte, fieldType int64) sqltypes.Value {
 	switch fieldType {
-	case schema.TYPE_FRACTIONAL:
+	case schema.CAT_FRACTIONAL:
 		return sqltypes.MakeFractional(bytes)
-	case schema.TYPE_NUMERIC:
+	case schema.CAT_NUMBER:
 		return sqltypes.MakeNumeric(bytes)
 	}
 	return sqltypes.MakeString(bytes)
+}
+
+func buildPkValue(pkList []sqltypes.Value) (pk []byte) {
+	var buffer bytes.Buffer
+	for i, v := range pkList {
+		buffer.Write(v.Raw())
+		if i != len(pkList)-1 {
+			buffer.WriteByte('|')
+		}
+	}
+	return buffer.Bytes()
 }
 
 // buildValueList builds the set of PK reference rows used to drive the next query.

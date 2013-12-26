@@ -51,7 +51,6 @@ func (engine *RocksDbEngine) Init(config *proto.DBConfigs) error {
 	engine.dbOptions = options
 	db, err := ratgo.Open(engine.config.DataPath, engine.dbOptions)
 	if err != nil {
-		panic(err)
 		return err
 	}
 	engine.db = db

@@ -17,7 +17,7 @@ func NewConsoleLogWriter() LoggerInterface {
 	return cw
 }
 
-func (self *ConsoleLogWriter) Init() error {
+func (self *ConsoleLogWriter) Init(conf interface{}) error {
 	return nil
 }
 
@@ -30,7 +30,3 @@ func (self *ConsoleLogWriter) WriteMsg(msg string, level int) error {
 }
 
 func (c *ConsoleLogWriter) Destroy() {}
-
-func init() {
-	Register("console", NewConsoleLogWriter)
-}

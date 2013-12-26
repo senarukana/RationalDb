@@ -190,10 +190,10 @@ func handleExecError(query *proto.Query, err *error, logStats *sqlQueryStats) {
 		}
 		*err = terr
 		terr.RecordStats()
-		// suppress these errors in logs
-		// if terr.ErrorType == RETRY {
-		// 	return
-		// }
+		//suppress these errors in logs
+		if terr.ErrorType == RETRY {
+			return
+		}
 		log.Error("%s: %v", terr.Message, query)
 	}
 }

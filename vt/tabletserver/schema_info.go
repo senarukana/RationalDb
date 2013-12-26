@@ -116,10 +116,10 @@ func testTables() *schema.Table {
 	)
 
 	a := schema.NewTable("a")
-	a.AddColumn("eid", "int", SQLZERO, "", true)
-	a.AddColumn("id", "int", SQLZERO, "", true)
-	a.AddColumn("name", "varchar(10)", SQLZERO, "", false)
-	a.AddColumn("foo", "varchar(10)", SQLZERO, "", false)
+	a.AddColumn("eid", "int", SQLZERO, "", true, false)
+	a.AddColumn("id", "int", SQLZERO, "", true, false)
+	a.AddColumn("name", "varchar(10)", SQLZERO, "", false, true)
+	a.AddColumn("foo", "varchar(10)", SQLZERO, "", false, true)
 	acolumns := []string{"eid", "id", "name", "foo"}
 	a.Indexes = append(a.Indexes, &schema.Index{Name: "PRIMARY", Columns: []string{"eid", "id"}, Cardinality: []uint64{1, 1}, DataColumns: acolumns})
 	a.Indexes = append(a.Indexes, &schema.Index{Name: "a_name", Columns: []string{"eid", "name"}, Cardinality: []uint64{1, 1}, DataColumns: a.Indexes[0].Columns})
@@ -183,7 +183,6 @@ func (si *SchemaInfo) Open(connFactory CreateConnectionFun) {
 	if len(tables) == 0 {
 		tables = append(tables, testTables())
 	}
-
 	si.tables = make(map[string]*schema.Table)
 	for _, tableInfo := range tables {
 		si.tables[tableInfo.Name] = tableInfo
@@ -208,7 +207,7 @@ func (si *SchemaInfo) DropTable(tableName string) {
 }
 
 func (si *SchemaInfo) GetPlan(logStats *sqlQueryStats, sql string) (plan *ExecPlan) {
-	log.Warn("plan sql ", sql)
+	log.Warn("plan sql %v", sql)
 	si.mu.Lock()
 	defer si.mu.Unlock()
 	if plan := si.getQuery(sql); plan != nil {
@@ -225,28 +224,21 @@ func (si *SchemaInfo) GetPlan(logStats *sqlQueryStats, sql string) (plan *ExecPl
 	}
 	splan, err := sqlparser.ExecParse(sql, GetTable)
 	if err != nil {
+		panic("test")
+		log.Info("parse error %v", err.Error())
 		panic(NewTabletError(FAIL, "%s", err))
 	}
 	plan = &ExecPlan{ExecPlan: splan, Table: tableInfo}
-	// plan.Rules = si.rules.filterByPlan(sql, plan.PlanId)
-	/*	if plan.PlanId.IsSelect() {
-			if plan.FieldQuery == nil {
-				log.Warn("Cannot cache field info: %s", sql)
-			} else {
-				sql := plan.FieldQuery.Query
-				//TODO
-				// r, err := si.executor(sql, 1, true)
-				logStats.QuerySources |= QUERY_SOURCE_DBENGINE
-				logStats.NumberOfQueries += 1
-				logStats.AddRewrittenSql(sql)
-				if err != nil {
-					panic(NewTabletError(FAIL, "Error fetching fields: %v", err))
-				}
-				plan.Fields = r.Fields
-			}
-		} else if plan.PlanId == sqlparser.PLAN_DDL || plan.PlanId == sqlparser.PLAN_SET {
-			return plan
-		}*/
+	if plan.PlanId.IsSelect() {
+		fields := make([]eproto.Field, len(plan.ColumnNumbers))
+		for i, cIdx := range plan.ColumnNumbers {
+			column := si.tables[plan.TableName].Columns[cIdx]
+			fields[i] = eproto.Field{column.Name, int64(column.Category)}
+		}
+		plan.Fields = fields
+	} else if plan.PlanId == sqlparser.PLAN_DDL || plan.PlanId == sqlparser.PLAN_SET {
+		return plan
+	}
 	si.queries.Set(sql, plan)
 	return plan
 }

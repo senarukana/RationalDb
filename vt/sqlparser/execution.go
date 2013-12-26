@@ -21,8 +21,10 @@ const (
 	PLAN_PK_EQUAL
 	PLAN_PK_IN
 	PLAN_SELECT_SUBQUERY
-	PLAN_DML_PK
-	PLAN_DML_SUBQUERY
+	PLAN_UPDATE_PK
+	PLAN_UPDATE_SUBQUERY
+	PLAN_DELETE_PK
+	PLAN_DELETE_SUBQUERY
 	PLAN_INSERT_PK
 	PLAN_INSERT_SUBQUERY
 	PLAN_SET
@@ -36,8 +38,11 @@ var planName = []string{
 	"PK_EQUAL",
 	"PK_IN",
 	"SELECT_SUBQUERY",
-	"DML_PK",
-	"DML_SUBQUERY",
+	"PLAN_UPDATE_PK",
+	"PLAN_UPDATE_SUBQUERY",
+	"PLAN_DELETE_PK",
+	"PLAN_DELETE_SUBQUERY",
+	"PLAN_INSERT_PK",
 	"INSERT_PK",
 	"INSERT_SUBQUERY",
 	"SET",
@@ -269,16 +274,11 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 		return plan
 	}
 	tableInfo := plan.setTableInfo(tableName, getTable)
+	log.Info("hashints:%#v", hasHints)
 
 	// Don't improve the plan if the select is for update
 	if node.At(SELECT_FOR_UPDATE_OFFSET).Type == FOR_UPDATE {
 		plan.Reason = REASON_FOR_UPDATE
-		return plan
-	}
-
-	// Further improvements possible only if table is row-cached
-	if tableInfo.CacheType == schema.CACHE_NONE || tableInfo.CacheType == schema.CACHE_W {
-		plan.Reason = REASON_NOCACHE
 		return plan
 	}
 
@@ -289,6 +289,7 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 		return plan
 	}
 	plan.ColumnNumbers = selects
+	log.Info("select expre:%#v", selects)
 
 	// where
 	conditions := node.At(SELECT_WHERE_OFFSET).execAnalyzeWhere()
@@ -296,6 +297,7 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 		plan.Reason = REASON_WHERE
 		return plan
 	}
+	log.Info("where:%#v", selects)
 
 	// order
 	if node.At(SELECT_ORDER_OFFSET).Len() != 0 {
@@ -386,7 +388,7 @@ func (node *Node) execAnalyzeInsert(getTable TableGetter) (plan *ExecPlan) {
 
 	if rowColumns := node.At(INSERT_COLUMN_LIST_OFFSET).getInsertColumnValue(tableInfo, rowList); rowColumns != nil {
 		plan.RowColumns = rowColumns
-		log.Info("row column is %d", len(rowColumns))
+		log.Info("row column is %v", rowColumns)
 	}
 	return plan
 }
@@ -398,19 +400,13 @@ func (node *Node) execAnalyzeUpdate(getTable TableGetter) (plan *ExecPlan) {
 	tableName := string(node.At(UPDATE_TABLE_OFFSET).Value)
 	tableInfo := plan.setTableInfo(tableName, getTable)
 
-	if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
-		log.Warn("no primary key for table %s", tableName)
-		plan.Reason = REASON_TABLE_NOINDEX
-		return plan
-	}
-
 	var ok bool
 	if plan.SecondaryPKValues, ok = node.At(UPDATE_LIST_OFFSET).execAnalyzeUpdateExpressions(tableInfo.Indexes[0]); !ok {
 		plan.Reason = REASON_PK_CHANGE
 		return plan
 	}
 
-	plan.PlanId = PLAN_DML_SUBQUERY
+	plan.PlanId = PLAN_UPDATE_SUBQUERY
 	plan.OuterQuery = node.GenerateUpdateOuterQuery(tableInfo.Indexes[0])
 	plan.Subquery = node.GenerateUpdateSubquery(tableInfo)
 
@@ -421,7 +417,7 @@ func (node *Node) execAnalyzeUpdate(getTable TableGetter) (plan *ExecPlan) {
 	}
 
 	if pkValues := getPKValues(conditions, tableInfo.Indexes[0]); pkValues != nil {
-		plan.PlanId = PLAN_DML_PK
+		plan.PlanId = PLAN_UPDATE_PK
 		plan.OuterQuery = plan.FullQuery
 		plan.PKValues = pkValues
 		return plan
@@ -443,7 +439,7 @@ func (node *Node) execAnalyzeDelete(getTable TableGetter) (plan *ExecPlan) {
 		return plan
 	}
 
-	plan.PlanId = PLAN_DML_SUBQUERY
+	plan.PlanId = PLAN_DELETE_SUBQUERY
 	plan.OuterQuery = node.GenerateDeleteOuterQuery(tableInfo.Indexes[0])
 	plan.Subquery = node.GenerateDeleteSubquery(tableInfo)
 
@@ -454,7 +450,7 @@ func (node *Node) execAnalyzeDelete(getTable TableGetter) (plan *ExecPlan) {
 	}
 
 	if pkValues := getPKValues(conditions, tableInfo.Indexes[0]); pkValues != nil {
-		plan.PlanId = PLAN_DML_PK
+		plan.PlanId = PLAN_DELETE_PK
 		plan.OuterQuery = plan.FullQuery
 		plan.PKValues = pkValues
 		return plan

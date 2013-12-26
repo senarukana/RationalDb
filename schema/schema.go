@@ -2,7 +2,6 @@ package schema
 
 import (
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/senarukana/rationaldb/sqltypes"
@@ -14,12 +13,7 @@ const (
 	CAT_OTHER = iota
 	CAT_NUMBER
 	CAT_VARBINARY
-)
-
-const (
-	TYPE_OTHER = iota
-	TYPE_NUMERIC
-	TYPE_FRACTIONAL
+	CAT_FRACTIONAL
 )
 
 // Cache types
@@ -58,7 +52,6 @@ type TableColumn struct {
 	IsPk     bool
 	IsAuto   bool
 	NextId   int64
-	Mutex    *sync.Mutex
 	IsUUID   bool
 }
 
@@ -69,26 +62,29 @@ func (self *TableColumn) GetNextId() int64 {
 	return atomic.AddInt64(&self.NextId, 1)
 }
 
-func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Value, extra string, isPk bool) {
+func (self *Table) AddColumn(name string, columnType string, defval sqltypes.Value, extra string, isPk, nullable bool) {
 	index := len(self.Columns)
 	self.Columns = append(self.Columns, TableColumn{Name: name})
+	self.Columns[index].IsPk = isPk
+	self.Columns[index].Nullable = nullable
 	if strings.Contains(columnType, "int") {
 		self.Columns[index].Category = CAT_NUMBER
 	} else if strings.HasPrefix(columnType, "varbinary") {
 		self.Columns[index].Category = CAT_VARBINARY
+	} else if strings.HasPrefix(columnType, "fractional") {
+		self.Columns[index].Category = CAT_FRACTIONAL
 	} else {
 		self.Columns[index].Category = CAT_OTHER
 	}
 
 	if extra == "auto_increment" {
 		self.Columns[index].IsAuto = true
-		self.Columns[index].Mutex = &sync.Mutex{}
 		self.Columns[index].NextId = 0
 		// Ignore default value, if any
 		return
+	} else if extra == "uuid" {
+		self.Columns[index].IsUUID = true
 	}
-	// isPk := true
-	self.Columns[index].IsPk = isPk
 
 	if defval.IsNull() {
 		return
