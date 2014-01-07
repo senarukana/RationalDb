@@ -51,7 +51,7 @@ type Config struct {
 // great (the overhead makes the final packets on the wire about twice
 // bigger than this).
 var DefaultQsConfig = Config{
-	EngineName:         "rocksdb",
+	EngineName:         "leveldb",
 	PoolSize:           16,
 	StreamPoolSize:     750,
 	MaxResultSize:      10000,

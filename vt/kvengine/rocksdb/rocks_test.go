@@ -9,18 +9,18 @@ import (
 
 func TestRocksEngine(t *testing.T) {
 	// init
-	conf := new(DBConfigs)
-	conf.DbName = "test"
-	engine := GetEngine("rocksdb", conf)
+	conf := new(proto.DBConfigs)
+	conf.DataPath = "test"
+	engine := NewRocksDbEngine()
+	err := engine.Init(conf)
 	if engine.Name() != "rocksdb" {
 		t.Fatalf("want engine name RocksDb, but result is %v\n", engine.Name())
 	}
-	var err error
-
-	err = engine.Init()
 	if err != nil {
 		t.Fatalf("Init engine error, %v\n", err.Error())
 	}
+	var connection proto.DbConnection
+	connection, _ = engine.Connect(&proto.DbConnectParams{DbName: "test", UserName: "ok"})
 
 	var result []byte
 	var results [][]byte
@@ -39,18 +39,18 @@ func TestRocksEngine(t *testing.T) {
 	wo := new(proto.DbWriteOptions)
 	ro := new(proto.DbReadOptions)
 	// Put
-	err = engine.Put(wo, k1, v1)
+	err = connection.Put(wo, k1, v1)
 	if err != nil {
 		t.Errorf("Put Key : %v error, %v\n", string(k1), err.Error())
 	}
 
-	err = engine.Puts(wo, [][]byte{k2, k3}, [][]byte{v2, v3})
+	err = connection.Puts(wo, [][]byte{k2, k3}, [][]byte{v2, v3})
 	if err != nil {
 		t.Errorf("Puts Key error, %v\n", err.Error())
 	}
 
 	// Get
-	result, err = engine.Get(ro, k1)
+	result, err = connection.Get(ro, k1)
 	if err != nil {
 		t.Errorf("Get key : %v error, %v\n", string(k1), err.Error())
 	}
@@ -58,7 +58,7 @@ func TestRocksEngine(t *testing.T) {
 		t.Errorf("Expect %v=%v, but is %v\n", string(k1), string(result), string(v1))
 	}
 
-	results, err = engine.Gets(ro, [][]byte{k2, k3})
+	results, err = connection.Gets(ro, [][]byte{k2, k3})
 	if err != nil {
 		t.Errorf("Gets error, %v\n", err.Error())
 	}
@@ -68,7 +68,7 @@ func TestRocksEngine(t *testing.T) {
 	}
 
 	// Iterate
-	iter, err := engine.Iterate(ro, k2, k4)
+	iter, err := connection.Iterate(ro, k2, k4, 0)
 	count := 0
 	for ; iter.Valid(); iter.Next() {
 		count++
@@ -79,11 +79,11 @@ func TestRocksEngine(t *testing.T) {
 	}
 	iter.Close()
 
-	engine.Close()
+	connection.Close()
 
-	err = engine.Destroy()
-	if err != nil {
-		t.Fatal("Destory Db error")
-	}
+	// err = connection.Destroy()
+	// if err != nil {
+	// 	t.Fatal("Destory Db error")
+	// }
 
 }

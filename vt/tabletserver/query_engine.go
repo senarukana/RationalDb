@@ -5,9 +5,9 @@
 package tabletserver
 
 import (
-	// "bytes"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,6 +85,7 @@ func NewQueryEngine(config Config) *QueryEngine {
 		panic(NewTabletErrorDB(FATAL, err))
 	}
 	qe.connPool = NewConnectionPool("ConnPool", config.PoolSize, time.Duration(config.IdleTimeout*1e9))
+
 	qe.schemaInfo = NewSchemaInfo(config.QueryCacheSize, time.Duration(config.IdleTimeout*1e9))
 	qe.consolidator = NewConsolidator()
 	qe.maxResultSize = sync2.AtomicInt64(config.MaxResultSize)
@@ -141,6 +142,14 @@ func (qe *QueryEngine) Rollback(logStats *sqlQueryStats, transactionId int64) {
 
 }
 
+func isDml(sql string) bool {
+	lower := strings.ToLower(sql)
+	if strings.HasPrefix(lower, "insert") || strings.HasPrefix(lower, "update") || strings.HasPrefix(lower, "delete") {
+		return true
+	}
+	return false
+}
+
 func (qe *QueryEngine) Execute(logStats *sqlQueryStats, query *proto.Query) (reply *eproto.QueryResult) {
 	qe.mu.RLock()
 	defer qe.mu.RUnlock()
@@ -168,21 +177,40 @@ func (qe *QueryEngine) Execute(logStats *sqlQueryStats, query *proto.Query) (rep
 	/*	if basePlan.PlanId == sqlparser.PLAN_DDL {
 		return qe.execDDL(logStats, query.Sql)
 	}*/
-
 	plan := &CompiledPlan{query.Sql, basePlan, query.BindVariables, query.TransactionId, query.ConnectionId}
-	conn := qe.connPool.Get()
-	defer conn.Recycle()
 	log.Info("Plan type is %s, reason is %s", plan.PlanId, plan.Reason)
+	if plan.Reason == sqlparser.REASON_ERR {
+		panic(NewTabletError(FAIL, plan.Error.Error()))
+	}
+	if isDml(query.Sql) {
+		conn := qe.connPool.Get()
+		defer conn.Recycle()
+		switch plan.PlanId {
+		case sqlparser.PLAN_INSERT_PK:
+			reply = qe.execInsertPK(logStats, conn, plan)
+		case sqlparser.PLAN_UPDATE_ALL:
+			reply = qe.execModifyAll(logStats, conn, plan, true)
+		case sqlparser.PLAN_UPDATE_PK:
+			reply = qe.execModifyPk(logStats, conn, plan, true)
+		case sqlparser.PLAN_DELETE_ALL:
+			reply = qe.execModifyAll(logStats, conn, plan, false)
+		case sqlparser.PLAN_DELETE_PK:
+			reply = qe.execModifyPk(logStats, conn, plan, false)
 
-	switch plan.PlanId {
-	case sqlparser.PLAN_INSERT_PK:
-		reply = qe.execInsertPK(logStats, conn, plan)
-	case sqlparser.PLAN_INSERT_SUBQUERY:
-		reply = qe.execInsertSubquery(logStats, conn, plan)
-	case sqlparser.PLAN_PK_EQUAL:
-		reply = qe.selectPkEqual(logStats, conn, plan)
-	default:
-		panic("Plan currently not supported")
+		default:
+			panic(NewTabletError(FAIL, "sql currently not supported"))
+		}
+	} else {
+		switch plan.PlanId {
+		case sqlparser.PLAN_SELECT_ALL:
+			reply = qe.selectAll(logStats, plan)
+		case sqlparser.PLAN_PK_EQUAL:
+			reply = qe.selectPkEqual(logStats, plan)
+		case sqlparser.PLAN_PK_IN:
+			reply = qe.selectPkIn(logStats, plan)
+		default:
+			panic(NewTabletError(FAIL, "sql currently not supported"))
+		}
 	}
 	return reply
 }
@@ -233,16 +261,11 @@ func (qe *QueryEngine) execInsertPK(logStats *sqlQueryStats, conn PoolConnection
 	var columnName string
 	keys := make([][]byte, 0, len(rowColumns)*len(tableInfo.Columns))
 	values := make([][]byte, 0, len(rowColumns)*len(tableInfo.Columns))
-	var pkList [][]sqltypes.Value
+	pkList := buildPkValueList(tableInfo, plan.PKValues, plan.BindVars)
 
-	if len(tableInfo.PKColumns) > 1 {
-		pkList = buildValueList(tableInfo, plan.PKValues, plan.BindVars)
-	}
-	log.Info("Row column length is %d", len(rowColumns))
 	for i, columnsMap := range rowColumns {
-		log.Info("map !!!!!:%v", len(columnsMap))
-		if pkList != nil { // multiple pk
-			pkValue = buildPkValue(pkList[i])
+		if len(tableInfo.PKColumns) > 1 { // multiple pk
+			pkValue = buildCompositeValue(pkList[i])
 		} else {
 			pkColumn := tableInfo.GetPKColumn(0)
 			if pkColumn.IsAuto {
@@ -257,17 +280,17 @@ func (qe *QueryEngine) execInsertPK(logStats *sqlQueryStats, conn PoolConnection
 				}
 				pkValue = []byte(uid.String())
 			} else {
-				// pkValue = plan.PKValues
+				pkValue = pkList[i][0].Raw() // single pk
 			}
 		}
 		log.Info("Pk Value is %v", string(pkValue))
 		for _, columnDef := range tableInfo.Columns {
 			columnName = columnDef.Name
 			if columnDef.IsPk {
+				value := columnsMap[columnName]
 				key = buildTableRowColumnKey(tableName, columnName, pkValue)
-				log.Info("pk key is %v", string(key))
 				keys = append(keys, key)
-				values = append(values, []byte{'0'})
+				values = append(values, value.Raw())
 
 				// if column is auto increment, update the value
 				if columnDef.IsAuto {
@@ -301,12 +324,24 @@ func (qe *QueryEngine) execInsertPK(logStats *sqlQueryStats, conn PoolConnection
 				}
 				if !value.IsNull() {
 					key = buildTableRowColumnKey(tableName, columnName, pkValue)
-					log.Info("normal key is %v", string(key))
 					keys = append(keys, key)
 					values = append(values, value.Raw())
-					log.Info("normal value is %v", value.String())
 				}
 			}
+		}
+		// secondary index
+		for _, index := range tableInfo.Indexes {
+			if index.Name == "PRIMARY" {
+				continue
+			}
+			columnValues := make([]sqltypes.Value, len(index.Columns))
+			for i, columnName := range index.Columns {
+				columnValues[i] = columnsMap[columnName]
+			}
+			indexKey := buildSecondaryIndexKey(tableName, index.Name, buildCompositeValue(columnValues))
+			log.Trace("idx key is %s", indexKey)
+			keys = append(keys, indexKey)
+			values = append(values, pkValue)
 		}
 	}
 	atomic.AddInt64(&qe.activeConnection, 1)
@@ -320,8 +355,83 @@ func (qe *QueryEngine) execInsertPK(logStats *sqlQueryStats, conn PoolConnection
 	return qr
 }
 
-func (qe *QueryEngine) execUpdatePk(logStats *sqlQueryStats, conn PoolConnection, plan *CompiledPlan) (result *eproto.QueryResult) {
-	return
+// Pk is in the request
+// if modiftyType is true, update method, else delete method
+func (qe *QueryEngine) execModifyPk(logStats *sqlQueryStats, conn PoolConnection, plan *CompiledPlan, modifyType bool) *eproto.QueryResult {
+	tableInfo := plan.Table
+	pkList := buildPkValueList(tableInfo, plan.PKValues, plan.BindVars)
+	// filter pk
+	existedPk := make([][]byte, 0, len(pkList))
+	for _, pkValues := range pkList {
+		pk := buildCompositeValue(pkValues)
+		if qe.fetchExists(logStats, buildTableRowColumnKey(plan.TableName, plan.Table.GetPk().Name, pk)) {
+			existedPk = append(existedPk, pk)
+		}
+	}
+	if modifyType == true {
+		return qe.execUpdate(logStats, conn, plan, existedPk)
+	} else {
+		return qe.execDelete(logStats, conn, plan, existedPk)
+	}
+}
+
+// No condition in the sql
+// if modiftyType is true, update method, else delete method
+func (qe *QueryEngine) execModifyAll(logStats *sqlQueryStats, conn PoolConnection, plan *CompiledPlan, modifyType bool) *eproto.QueryResult {
+	pks := qe.getAllPks(logStats, plan.TableName, conn)
+	log.Info("delete %d", len(pks))
+	if modifyType {
+		return qe.execUpdate(logStats, conn, plan, pks)
+	} else {
+		return qe.execDelete(logStats, conn, plan, pks)
+	}
+}
+
+func (qe *QueryEngine) execUpdate(logStats *sqlQueryStats, conn PoolConnection, plan *CompiledPlan, pks [][]byte) (qr *eproto.QueryResult) {
+	tableName := plan.TableName
+	columnsLen := len(plan.UpdateColumns)
+	keys := make([][]byte, len(pks)*columnsLen)
+	values := make([][]byte, len(pks)*columnsLen)
+	for i, pk := range pks {
+		for j, column := range plan.UpdateColumns {
+			keys[i*columnsLen+j] = buildTableRowColumnKey(tableName, column.Key, pk)
+			values[i*columnsLen+j] = []byte(column.Value)
+		}
+	}
+
+	atomic.AddInt64(&qe.activeConnection, 1)
+	defer atomic.AddInt64(&qe.activeConnection, -1)
+	err := conn.Puts(nil, keys, values)
+	if err != nil {
+		panic(NewTabletErrorDB(FAIL, err))
+	}
+
+	qr = &eproto.QueryResult{RowsAffected: uint64(len(pks))}
+	return qr
+}
+
+func (qe *QueryEngine) execDelete(logStats *sqlQueryStats, conn PoolConnection, plan *CompiledPlan, pks [][]byte) (qr *eproto.QueryResult) {
+	tableName := plan.TableName
+	tableInfo := plan.Table
+	columnsLen := len(tableInfo.Columns)
+
+	keys := make([][]byte, len(pks)*columnsLen)
+	for i, pk := range pks {
+		for j, column := range tableInfo.Columns {
+			keys[i*columnsLen+j] = buildTableRowColumnKey(tableName, column.Name, pk)
+			log.Info("delete key %v", string(keys[i*columnsLen+j]))
+		}
+	}
+
+	atomic.AddInt64(&qe.activeConnection, 1)
+	defer atomic.AddInt64(&qe.activeConnection, -1)
+	err := conn.Deletes(nil, keys)
+	if err != nil {
+		panic(NewTabletErrorDB(FAIL, err))
+	}
+
+	qr = &eproto.QueryResult{RowsAffected: uint64(len(pks))}
+	return qr
 }
 
 func (qe *QueryEngine) execInsertSubquery(logStats *sqlQueryStats, conn PoolConnection, plan *CompiledPlan) (result *eproto.QueryResult) {
@@ -332,19 +442,131 @@ func (qe *QueryEngine) execInsertPKRows(logStats *sqlQueryStats, conn PoolConnec
 	return
 }
 
-func (qe *QueryEngine) selectPkEqual(logStats *sqlQueryStats, conn PoolConnection, plan *CompiledPlan) (result *eproto.QueryResult) {
-	pkRows := buildValueList(plan.Table, plan.PKValues, plan.BindVars)
+func (qe *QueryEngine) selectAll(logStats *sqlQueryStats, plan *CompiledPlan) (result *eproto.QueryResult) {
+	tableName := plan.TableName
+	pks := qe.getAllPks(logStats, plan.TableName, nil)
+	var keys, values [][]byte
+	for _, pk := range pks {
+		for _, field := range plan.Fields {
+			keys = append(keys, buildTableRowColumnKey(tableName, field.Name, pk))
+		}
+	}
+
+	result = &eproto.QueryResult{}
+	result.Fields = plan.Fields
+
+	if len(pks) == 0 {
+		result.RowsAffected = 0
+		return result
+	}
+
+	values = qe.fetch(logStats, keys)
+
+	rowList := make([][]sqltypes.Value, len(pks))
+	for i := range pks {
+		rowList[i] = make([]sqltypes.Value, len(plan.Fields))
+		for j, field := range plan.Fields {
+			rowList[i][j] = buildValue(values[i*len(plan.Fields)+j], field.Type)
+			log.Info(rowList[i][j].String())
+		}
+	}
+	result.Rows = rowList
+	result.RowsAffected = uint64(len(pks))
+	return result
+}
+
+func (qe *QueryEngine) selectPkEqual(logStats *sqlQueryStats, plan *CompiledPlan) (result *eproto.QueryResult) {
+	pkRows := buildPkValueList(plan.Table, plan.PKValues, plan.BindVars)
 	if len(pkRows) != 1 || plan.Fields == nil {
 		panic("unexpected")
 	}
 
 	tableName := plan.TableName
-	keys := make([][]byte, len(plan.ColumnNumbers))
+	keys := make([][]byte, len(plan.Fields))
+	pkValue := buildCompositeValue(pkRows[0])
+	log.Info("pk value is %s", string(pkValue))
 
-	pkValue := buildPkValue(pkRows[0])
+	result = &eproto.QueryResult{}
+	result.Fields = plan.Fields
+
+	// check if pk exists
+	if !qe.fetchExists(logStats, buildTableRowColumnKey(tableName, plan.Table.GetPk().Name, pkValue)) {
+		// not exists
+		result.RowsAffected = 0
+		return result
+	}
+
 	for i, field := range plan.Fields {
 		keys[i] = buildTableRowColumnKey(tableName, field.Name, pkValue)
 	}
+
+	values := qe.fetch(logStats, keys)
+
+	rowValues := make([]sqltypes.Value, len(plan.Fields))
+	for i, field := range plan.Fields {
+		if len(values[i]) != 0 {
+			rowValues[i] = buildValue(values[i], field.Type)
+		} else {
+			rowValues[i] = sqltypes.NULL
+		}
+	}
+
+	result.Rows = make([][]sqltypes.Value, 1)
+	result.Rows[0] = rowValues
+	result.RowsAffected = 1
+	return result
+}
+
+func (qe *QueryEngine) selectPkIn(logStats *sqlQueryStats, plan *CompiledPlan) (result *eproto.QueryResult) {
+	pkList := buildINValueList(plan.Table, plan.PKValues, plan.BindVars)
+	tableName := plan.TableName
+
+	existedPk := make([][]byte, 0, len(pkList))
+	// filter exists pk
+	for _, pkValues := range pkList {
+		pk := pkValues[0].Raw()
+		if qe.fetchExists(logStats, buildTableRowColumnKey(tableName, plan.Table.GetPk().Name, pk)) {
+			existedPk = append(existedPk, pk)
+		}
+	}
+
+	result = &eproto.QueryResult{}
+	result.Fields = plan.Fields
+
+	if len(existedPk) == 0 {
+		result.RowsAffected = 0
+		return result
+	}
+
+	keys := make([][]byte, len(plan.Fields)*len(existedPk))
+	for i, pk := range existedPk {
+		for j, field := range plan.Fields {
+			keys[i*len(plan.Fields)+j] = buildTableRowColumnKey(tableName, field.Name, pk)
+		}
+	}
+	values := qe.fetch(logStats, keys)
+	rowList := make([][]sqltypes.Value, len(existedPk))
+	for i := range existedPk {
+		rowList[i] = make([]sqltypes.Value, len(plan.Fields))
+		for j, field := range plan.Fields {
+			rowList[i][j] = buildValue(values[i*len(plan.Fields)+j], field.Type)
+		}
+	}
+
+	result.Rows = rowList
+	result.RowsAffected = uint64(len(pkList))
+	return result
+}
+
+func (qe *QueryEngine) selectSubquery(logStats *sqlQueryStats, plan *CompiledPlan) (result *eproto.QueryResult) {
+	return
+}
+
+func (qe *QueryEngine) selectPkNotInEqual(logStats *sqlQueryStats, plan *CompiledPlan) (primaryKey [][]byte) {
+	return
+}
+
+func (qe *QueryEngine) fetch(logStats *sqlQueryStats, keys [][]byte) (result [][]byte) {
 	waitingForConnectionStart := time.Now()
 	conn, err := qe.connPool.SafeGet()
 	logStats.WaitingForConnection += time.Now().Sub(waitingForConnectionStart)
@@ -353,22 +575,69 @@ func (qe *QueryEngine) selectPkEqual(logStats *sqlQueryStats, conn PoolConnectio
 	} else {
 		defer conn.Recycle()
 	}
-	values, err := conn.Gets(nil, keys)
+	result, err = conn.Gets(nil, keys)
 	if err != nil {
 		panic(NewTabletErrorDB(FAIL, err))
 	}
-	rowValues := make([]sqltypes.Value, len(plan.ColumnNumbers))
-	for i, field := range plan.Fields {
-		rowValues[i] = buildValue(values[i], field.Type)
-	}
-	logStats.QuerySources |= QUERY_SOURCE_DBENGINE
+	return result
+}
 
-	result = &eproto.QueryResult{}
-	result.Fields = plan.Fields
-	result.Rows = make([][]sqltypes.Value, 1)
-	result.Rows[0] = rowValues
-	result.RowsAffected = 1
-	return
+func (qe *QueryEngine) fetchExists(logStats *sqlQueryStats, key []byte) (existed bool) {
+	waitingForConnectionStart := time.Now()
+	conn, err := qe.connPool.SafeGet()
+	logStats.WaitingForConnection += time.Now().Sub(waitingForConnectionStart)
+	if err != nil {
+		panic(NewTabletErrorDB(FATAL, err))
+	} else {
+		defer conn.Recycle()
+	}
+	existed, err = conn.Exists(nil, key)
+	if err != nil {
+		panic(NewTabletErrorDB(FAIL, err))
+	}
+	return existed
+}
+
+func (qe *QueryEngine) fetchIterate(logStats *sqlQueryStats, conn PoolConnection,
+	start, end []byte, limit int, ignoreKey, ignoreValue bool) (keys [][]byte, values [][]byte) {
+	var err error
+	if conn == nil {
+		waitingForConnectionStart := time.Now()
+		conn, err = qe.connPool.SafeGet()
+		logStats.WaitingForConnection += time.Now().Sub(waitingForConnectionStart)
+		if err != nil {
+			panic(NewTabletErrorDB(FATAL, err))
+		} else {
+			defer conn.Recycle()
+		}
+	}
+	var cursor eproto.DbCursor
+	if cursor, err = conn.Iterate(nil, start, end, limit); err != nil {
+		panic(NewTabletErrorDB(FAIL, err))
+	}
+	for ; cursor.Valid(); cursor.Next() {
+		if !ignoreKey {
+			keys = append(keys, cursor.Key())
+		}
+		if !ignoreValue {
+			values = append(values, cursor.Value())
+		}
+	}
+	if cursor.Error() != nil {
+		panic(NewTabletErrorDB(FAIL, err))
+	}
+	return keys, values
+}
+
+func (qe *QueryEngine) getAllPks(logStats *sqlQueryStats, tableName string, conn PoolConnection) (pks [][]byte) {
+	tableInfo := qe.schemaInfo.tables[tableName]
+	pkStart := []byte(fmt.Sprintf("%s|%s|", tableName, tableInfo.GetPk().Name))
+	pkEnd := []byte(fmt.Sprintf("%s|%s||", tableName, tableInfo.GetPk().Name))
+	_, pks = qe.fetchIterate(logStats, conn, pkStart, pkEnd, 0, true, false)
+	for _, pk := range pks {
+		log.Info("pkpkpk:%s", string(pk))
+	}
+	return pks
 }
 
 /*func (qe *QueryEngine) fetch(logStats *sqlQueryStats, parsed_query *sqlparser.ParsedQuery,

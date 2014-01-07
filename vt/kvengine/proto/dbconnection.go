@@ -18,6 +18,8 @@ type DbConnection interface {
 	Id() int64
 	Close()
 
+	Exists(options *DbReadOptions, key []byte) (bool, error)
+
 	Get(options *DbReadOptions, key []byte) ([]byte, error)
 	Gets(options *DbReadOptions, key [][]byte) ([][]byte, error)
 

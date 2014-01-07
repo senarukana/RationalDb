@@ -38,14 +38,14 @@ func (engine *RocksDbEngine) Init(config *proto.DBConfigs) error {
 		config.RocksDbConfigs = DefaultRocksDbConf
 	}
 	options := ratgo.NewOptions()
-	// options.SetCreateIfMissing(config.CreateIfMissing)
+	// options.SetCreateIfMissing(config.RocksDbConfigs.CreateIfMissing)
 	options.SetCreateIfMissing(true)
-	options.SetParanoidChecks(config.ParanoidCheck)
-	if config.LRUCacheSize > 0 {
-		options.SetCache(ratgo.NewLRUCache(config.LRUCacheSize))
+	options.SetParanoidChecks(config.RocksDbConfigs.ParanoidCheck)
+	if config.RocksDbConfigs.LRUCacheSize > 0 {
+		options.SetCache(ratgo.NewLRUCache(config.RocksDbConfigs.LRUCacheSize))
 	}
-	if config.BloomFilterLength > 0 {
-		options.SetFilterPolicy(ratgo.NewBloomFilter(config.BloomFilterLength))
+	if config.RocksDbConfigs.BloomFilterLength > 0 {
+		options.SetFilterPolicy(ratgo.NewBloomFilter(config.RocksDbConfigs.BloomFilterLength))
 	}
 	engine.config = config
 	engine.dbOptions = options

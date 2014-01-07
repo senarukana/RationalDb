@@ -11,6 +11,7 @@ type DBConfigs struct {
 	Shard    string
 
 	*RocksDbConfigs
+	*LevelDbConfigs
 
 	AppConnectParams   *DbConnectParams
 	AdminConnectParams *DbConnectParams
@@ -23,6 +24,13 @@ type DbConnectParams struct {
 }
 
 type RocksDbConfigs struct {
+	CreateIfMissing   bool
+	ParanoidCheck     bool
+	LRUCacheSize      int
+	BloomFilterLength int
+}
+
+type LevelDbConfigs struct {
 	CreateIfMissing   bool
 	ParanoidCheck     bool
 	LRUCacheSize      int

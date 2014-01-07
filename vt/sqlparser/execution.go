@@ -5,12 +5,18 @@
 package sqlparser
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 
 	"github.com/senarukana/rationaldb/log"
 	"github.com/senarukana/rationaldb/schema"
 	"github.com/senarukana/rationaldb/sqltypes"
+)
+
+var (
+	errNotSupported = errors.New("Sorry, sql currently not supported")
+	errUpdatePk     = errors.New("Sorry, update pk not supported")
 )
 
 type PlanType int
@@ -21,10 +27,13 @@ const (
 	PLAN_PK_EQUAL
 	PLAN_PK_IN
 	PLAN_SELECT_SUBQUERY
+	PLAN_SELECT_ALL
 	PLAN_UPDATE_PK
 	PLAN_UPDATE_SUBQUERY
+	PLAN_UPDATE_ALL
 	PLAN_DELETE_PK
 	PLAN_DELETE_SUBQUERY
+	PLAN_DELETE_ALL
 	PLAN_INSERT_PK
 	PLAN_INSERT_SUBQUERY
 	PLAN_SET
@@ -35,14 +44,17 @@ const (
 // Must exactly match order of plan constants.
 var planName = []string{
 	"PASS_SELECT",
+	"PASS_DML",
 	"PK_EQUAL",
 	"PK_IN",
 	"SELECT_SUBQUERY",
-	"PLAN_UPDATE_PK",
-	"PLAN_UPDATE_SUBQUERY",
-	"PLAN_DELETE_PK",
-	"PLAN_DELETE_SUBQUERY",
-	"PLAN_INSERT_PK",
+	"SELECT_ALL",
+	"UPDATE_PK",
+	"UPDATE_SUBQUERY",
+	"UPDATE_ALL",
+	"DELETE_PK",
+	"DELETE_SUBQUERY",
+	"DELETE_ALL",
 	"INSERT_PK",
 	"INSERT_SUBQUERY",
 	"SET",
@@ -63,7 +75,7 @@ func PlanByName(s string) (pt PlanType, ok bool) {
 }
 
 func (pt PlanType) IsSelect() bool {
-	return pt == PLAN_PASS_SELECT || pt == PLAN_PK_EQUAL || pt == PLAN_PK_IN || pt == PLAN_SELECT_SUBQUERY
+	return pt == PLAN_PASS_SELECT || pt == PLAN_PK_EQUAL || pt == PLAN_PK_IN || pt == PLAN_SELECT_ALL || pt == PLAN_SELECT_SUBQUERY
 }
 
 func (pt PlanType) MarshalJSON() ([]byte, error) {
@@ -87,6 +99,8 @@ const (
 	REASON_PK_CHANGE
 	REASON_COMPOSITE_PK
 	REASON_HAS_HINTS
+	REASON_ERR
+	REASON_UNSUPPORTED
 )
 
 // Must exactly match order of reason constants.
@@ -113,6 +127,10 @@ func (rt ReasonType) String() string {
 
 func (rt ReasonType) MarshalJSON() ([]byte, error) {
 	return ([]byte)(fmt.Sprintf("\"%s\"", rt.String())), nil
+}
+
+type Pair struct {
+	Key, Value string
 }
 
 // ExecPlan is built for selects and DMLs.
@@ -142,8 +160,6 @@ type ExecPlan struct {
 	// For PLAN_INSERT_SUBQUERY, columns to be inserted
 	ColumnNumbers []int
 
-	RowColumns []map[string]sqltypes.Value
-
 	// PLAN_PK_EQUAL, PLAN_DML_PK: where clause values
 	// PLAN_PK_IN: IN clause values
 	// PLAN_INSERT_PK: values clause
@@ -159,6 +175,16 @@ type ExecPlan struct {
 	// PLAN_SET
 	SetKey   string
 	SetValue interface{}
+
+	// For insert, rows to be inserted
+	RowColumns []map[string]sqltypes.Value
+
+	// For secondary index select
+	Conditions []*Node
+
+	UpdateColumns []Pair
+
+	Error error
 }
 
 type DDLPlan struct {
@@ -234,7 +260,6 @@ func DDLParse(sql string) (plan *DDLPlan) {
 // Implementation
 
 func (node *Node) execAnalyzeSql(getTable TableGetter) (plan *ExecPlan) {
-	log.Warn("TYPE IS", node.Type)
 	switch node.Type {
 	case SELECT, UNION, UNION_ALL, MINUS, EXCEPT, INTERSECT:
 		return node.execAnalyzeSelect(getTable)
@@ -294,10 +319,13 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 	// where
 	conditions := node.At(SELECT_WHERE_OFFSET).execAnalyzeWhere()
 	if conditions == nil {
+		plan.PlanId = PLAN_SELECT_ALL
 		plan.Reason = REASON_WHERE
 		return plan
 	}
-	log.Info("where:%#v", selects)
+	for _, node := range conditions {
+		log.Trace("%v", node)
+	}
 
 	// order
 	if node.At(SELECT_ORDER_OFFSET).Len() != 0 {
@@ -340,15 +368,18 @@ func (node *Node) execAnalyzeSelect(getTable TableGetter) (plan *ExecPlan) {
 
 	plan.IndexUsed = getIndexMatch(conditions, tableInfo.Indexes)
 	if plan.IndexUsed == "" {
-		plan.Reason = REASON_NOINDEX_MATCH
-		return plan
+		panic(NewParserError("no index matches the sql"))
 	}
 	if plan.IndexUsed == "PRIMARY" {
 		plan.Reason = REASON_PKINDEX
+		if len(conditions) != 1 {
+			plan.Conditions = conditions
+		}
 		return plan
 	}
 	// TODO: We can further optimize. Change this to pass-through if select list matches all columns in index.
 	plan.PlanId = PLAN_SELECT_SUBQUERY
+	plan.Conditions = conditions
 	plan.OuterQuery = node.GenerateInOuterQuery(tableInfo)
 	plan.Subquery = node.GenerateSelectSubquery(tableInfo, plan.IndexUsed)
 	return plan
@@ -400,9 +431,15 @@ func (node *Node) execAnalyzeUpdate(getTable TableGetter) (plan *ExecPlan) {
 	tableName := string(node.At(UPDATE_TABLE_OFFSET).Value)
 	tableInfo := plan.setTableInfo(tableName, getTable)
 
-	var ok bool
-	if plan.SecondaryPKValues, ok = node.At(UPDATE_LIST_OFFSET).execAnalyzeUpdateExpressions(tableInfo.Indexes[0]); !ok {
-		plan.Reason = REASON_PK_CHANGE
+	var status updateStatus
+	plan.UpdateColumns, status = node.At(UPDATE_LIST_OFFSET).execAnalyzeUpdateExpressions(tableInfo.Indexes[0])
+	if status == updatePkValue {
+		plan.Reason = REASON_ERR
+		plan.Error = errUpdatePk
+		return plan
+	} else if status == updateUnsupport {
+		plan.Reason = REASON_ERR
+		plan.Error = errNotSupported
 		return plan
 	}
 
@@ -412,6 +449,7 @@ func (node *Node) execAnalyzeUpdate(getTable TableGetter) (plan *ExecPlan) {
 
 	conditions := node.At(UPDATE_WHERE_OFFSET).execAnalyzeWhere()
 	if conditions == nil {
+		plan.PlanId = PLAN_UPDATE_ALL
 		plan.Reason = REASON_WHERE
 		return plan
 	}
@@ -422,7 +460,7 @@ func (node *Node) execAnalyzeUpdate(getTable TableGetter) (plan *ExecPlan) {
 		plan.PKValues = pkValues
 		return plan
 	}
-
+	plan.Reason = REASON_UNSUPPORTED
 	return plan
 }
 
@@ -433,18 +471,13 @@ func (node *Node) execAnalyzeDelete(getTable TableGetter) (plan *ExecPlan) {
 	tableName := string(node.At(DELETE_TABLE_OFFSET).Value)
 	tableInfo := plan.setTableInfo(tableName, getTable)
 
-	if len(tableInfo.Indexes) == 0 || tableInfo.Indexes[0].Name != "PRIMARY" {
-		log.Warn("no primary key for table %s", tableName)
-		plan.Reason = REASON_TABLE_NOINDEX
-		return plan
-	}
-
 	plan.PlanId = PLAN_DELETE_SUBQUERY
 	plan.OuterQuery = node.GenerateDeleteOuterQuery(tableInfo.Indexes[0])
 	plan.Subquery = node.GenerateDeleteSubquery(tableInfo)
 
 	conditions := node.At(DELETE_WHERE_OFFSET).execAnalyzeWhere()
 	if conditions == nil {
+		plan.PlanId = PLAN_DELETE_ALL
 		plan.Reason = REASON_WHERE
 		return plan
 	}
@@ -455,7 +488,8 @@ func (node *Node) execAnalyzeDelete(getTable TableGetter) (plan *ExecPlan) {
 		plan.PKValues = pkValues
 		return plan
 	}
-
+	plan.Reason = REASON_ERR
+	plan.Error = errNotSupported
 	return plan
 }
 
@@ -672,24 +706,32 @@ func (node *Node) parseList() (values interface{}, isList bool) {
 //-----------------------------------------------
 // Update expressions
 
-func (node *Node) execAnalyzeUpdateExpressions(pkIndex *schema.Index) (pkValues []interface{}, ok bool) {
+type updateStatus int
+
+const (
+	updateOk updateStatus = iota
+	updatePkValue
+	updateUnsupport
+)
+
+func (node *Node) execAnalyzeUpdateExpressions(pkIndex *schema.Index) (updateColumns []Pair, status updateStatus) {
+	updateColumns = make([]Pair, node.Len())
 	for i := 0; i < node.Len(); i++ {
 		columnName := string(node.At(i).At(0).Value)
 		index := pkIndex.FindColumn(columnName)
-		if index == -1 {
-			continue
+		if index != -1 {
+			// update pkvalues not supported
+			return nil, updatePkValue
 		}
 		value := node.At(i).At(1).execAnalyzeValue()
 		if value == nil {
-			log.Warn("expression is too complex %v", node.At(i).At(0))
-			return nil, false
+			log.Warn("unsupported update expression", node.At(i).At(0))
+			return nil, updateUnsupport
 		}
-		if pkValues == nil {
-			pkValues = make([]interface{}, len(pkIndex.Columns))
-		}
-		pkValues[index] = asInterface(value)
+		log.Info(string(value.Value))
+		updateColumns[i] = Pair{columnName, string(value.Value)}
 	}
-	return pkValues, true
+	return updateColumns, updateOk
 }
 
 //-----------------------------------------------
@@ -697,13 +739,9 @@ func (node *Node) execAnalyzeUpdateExpressions(pkIndex *schema.Index) (pkValues 
 
 func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (rowColumns []map[string]sqltypes.Value) {
 	log.Warn("node.Sub is ", len(node.Sub))
-	if len(node.Sub) > 0 {
-		rowLen := len(node.Sub)
-		rowColumns = make([]map[string]sqltypes.Value, rowLen)
-	} else {
-		rowLen := rowList.Len()
-		rowColumns = make([]map[string]sqltypes.Value, rowLen)
-	}
+
+	rowLen := rowList.Len()
+	rowColumns = make([]map[string]sqltypes.Value, rowLen)
 
 	for i := 0; i < rowList.Len(); i++ {
 		rowColumns[i] = make(map[string]sqltypes.Value)
@@ -738,7 +776,6 @@ func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (
 	}
 
 	if len(node.Sub) == 0 {
-
 		tableColumns := tableInfo.Columns
 		log.Info("tableColumns %v", tableColumns)
 		for i := 0; i < len(tableColumns); i++ {
@@ -746,8 +783,6 @@ func (node *Node) getInsertColumnValue(tableInfo *schema.Table, rowList *Node) (
 			values := make([]sqltypes.Value, rowList.Len())
 			log.Info("values len %v", len(values))
 			for j := 0; j < rowList.Len(); j++ {
-				log.Info("j : %v", j)
-				log.Info("i : %v", i)
 				node := rowList.At(j).At(0).At(i) // NODE_LIST->'('->NODE_LIST->Value
 				value := node.execAnalyzeValue()
 				log.Info("value is %v", value)

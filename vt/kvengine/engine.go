@@ -2,6 +2,7 @@ package kvengine
 
 import (
 	"github.com/senarukana/rationaldb/log"
+	"github.com/senarukana/rationaldb/vt/kvengine/leveldb"
 	"github.com/senarukana/rationaldb/vt/kvengine/proto"
 	"github.com/senarukana/rationaldb/vt/kvengine/rocksdb"
 )
@@ -64,4 +65,5 @@ func (em *Engine) Connect(params *proto.DbConnectParams) (conn *DBConnection, er
 
 func init() {
 	Register("rocksdb", rocksdb.NewRocksDbEngine)
+	Register("leveldb", leveldb.NewLevelDbEngine)
 }

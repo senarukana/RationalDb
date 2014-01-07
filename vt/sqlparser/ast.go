@@ -6,6 +6,7 @@ package sqlparser
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/senarukana/rationaldb/sqltypes"
@@ -23,9 +24,17 @@ func (err ParserError) Error() string {
 	return err.Message
 }
 
+var (
+	errInvalidSql = errors.New("Sorry, invalid sql syntax")
+)
+
 func handleError(err *error) {
 	if x := recover(); x != nil {
-		*err = x.(ParserError)
+		if e, ok := x.(ParserError); ok {
+			*err = e
+		} else {
+			*err = errInvalidSql
+		}
 	}
 }
 

@@ -1,29 +1,28 @@
-package rocksdb
+package leveldb
 
 import (
 	"bytes"
 	"math"
 
-	"github.com/senarukana/ratgo"
-	"github.com/senarukana/rationaldb/log"
+	"github.com/jmhodges/levigo"
 	"github.com/senarukana/rationaldb/vt/kvengine/proto"
 )
 
-type RocksDbConnection struct {
+type LevelDbConnection struct {
 	id int64
-	db *ratgo.DB
+	db *levigo.DB
 }
 
-func (connection *RocksDbConnection) Close() {
+func (connection *LevelDbConnection) Close() {
 	connection.id = 0
 	connection.db = nil
 }
 
-func (connection *RocksDbConnection) Id() int64 {
+func (connection *LevelDbConnection) Id() int64 {
 	return connection.id
 }
 
-func (connection *RocksDbConnection) Exists(options *proto.DbReadOptions, key []byte) (bool, error) {
+func (connection *LevelDbConnection) Exists(options *proto.DbReadOptions, key []byte) (bool, error) {
 	v, err := connection.Get(options, key)
 	if err != nil {
 		return false, err
@@ -34,59 +33,61 @@ func (connection *RocksDbConnection) Exists(options *proto.DbReadOptions, key []
 	return true, nil
 }
 
-func (connection *RocksDbConnection) Get(options *proto.DbReadOptions, key []byte) ([]byte, error) {
-	ro := ratgo.NewReadOptions()
+func (connection *LevelDbConnection) Get(options *proto.DbReadOptions, key []byte) ([]byte, error) {
+	ro := levigo.NewReadOptions()
 	defer ro.Close()
 	if options != nil {
 		ro.SetFillCache(options.FillCache)
 		ro.SetVerifyChecksums(options.VerifyChecksum)
 		if options.Snapshot != nil {
-			rocksdbSnapshot := options.Snapshot.Snapshot.(*ratgo.Snapshot)
-			ro.SetSnapshot(rocksdbSnapshot)
+			leveldbSnapshot := options.Snapshot.Snapshot.(*levigo.Snapshot)
+			ro.SetSnapshot(leveldbSnapshot)
 		}
 	}
 	return connection.db.Get(ro, key)
 }
 
-func (connection *RocksDbConnection) Gets(options *proto.DbReadOptions, keys [][]byte) ([][]byte, error) {
-	ro := ratgo.NewReadOptions()
+func (connection *LevelDbConnection) Gets(options *proto.DbReadOptions, keys [][]byte) (results [][]byte, err error) {
+	ro := levigo.NewReadOptions()
 	defer ro.Close()
 	if options != nil {
 		ro.SetFillCache(options.FillCache)
 		ro.SetVerifyChecksums(options.VerifyChecksum)
 		if options.Snapshot != nil {
-			rocksdbSnapshot := options.Snapshot.Snapshot.(*ratgo.Snapshot)
-			ro.SetSnapshot(rocksdbSnapshot)
+			leveldbSnapshot := options.Snapshot.Snapshot.(*levigo.Snapshot)
+			ro.SetSnapshot(leveldbSnapshot)
+		} else {
+			snap := connection.db.NewSnapshot()
+			ro.SetSnapshot(snap)
 		}
 	}
-	results, errors := connection.db.MultiGet(ro, keys)
-	for _, err := range errors {
+	results = make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		v, err := connection.db.Get(ro, key)
 		if err != nil {
-			log.Error("Get Key:%v error, error", err)
 			return nil, err
 		}
+		results = append(results, v)
 	}
 	return results, nil
 }
 
-func (connection *RocksDbConnection) Put(options *proto.DbWriteOptions, key []byte, value []byte) error {
-	wo := ratgo.NewWriteOptions()
+func (connection *LevelDbConnection) Put(options *proto.DbWriteOptions, key []byte, value []byte) error {
+	wo := levigo.NewWriteOptions()
 	defer wo.Close()
 	if options != nil {
 		wo.SetSync(options.Sync)
-		wo.SetDisableWAL(options.DisableWAL)
 	}
 	return connection.db.Put(wo, key, value)
 }
 
-func (connection *RocksDbConnection) Puts(options *proto.DbWriteOptions, keys [][]byte, values [][]byte) error {
-	wo := ratgo.NewWriteOptions()
+func (connection *LevelDbConnection) Puts(options *proto.DbWriteOptions, keys [][]byte, values [][]byte) error {
+	wo := levigo.NewWriteOptions()
 	defer wo.Close()
 	if options != nil {
 		wo.SetSync(options.Sync)
-		wo.SetDisableWAL(options.DisableWAL)
 	}
-	batch := ratgo.NewWriteBatch()
+	batch := levigo.NewWriteBatch()
 	defer batch.Close()
 	for i, key := range keys {
 		batch.Put(key, values[i])
@@ -94,24 +95,22 @@ func (connection *RocksDbConnection) Puts(options *proto.DbWriteOptions, keys []
 	return connection.db.Write(wo, batch)
 }
 
-func (connection *RocksDbConnection) Delete(options *proto.DbWriteOptions, key []byte) error {
-	wo := ratgo.NewWriteOptions()
+func (connection *LevelDbConnection) Delete(options *proto.DbWriteOptions, key []byte) error {
+	wo := levigo.NewWriteOptions()
 	defer wo.Close()
 	if options != nil {
 		wo.SetSync(options.Sync)
-		wo.SetDisableWAL(options.DisableWAL)
 	}
 	return connection.db.Delete(wo, key)
 }
 
-func (connection *RocksDbConnection) Deletes(options *proto.DbWriteOptions, keys [][]byte) error {
-	wo := ratgo.NewWriteOptions()
+func (connection *LevelDbConnection) Deletes(options *proto.DbWriteOptions, keys [][]byte) error {
+	wo := levigo.NewWriteOptions()
 	defer wo.Close()
 	if options != nil {
 		wo.SetSync(options.Sync)
-		wo.SetDisableWAL(options.DisableWAL)
 	}
-	batch := ratgo.NewWriteBatch()
+	batch := levigo.NewWriteBatch()
 	defer batch.Close()
 	for _, key := range keys {
 		batch.Delete(key)
@@ -119,35 +118,35 @@ func (connection *RocksDbConnection) Deletes(options *proto.DbWriteOptions, keys
 	return connection.db.Write(wo, batch)
 }
 
-func (connection *RocksDbConnection) Snapshot() (*proto.DbSnapshot, error) {
+func (connection *LevelDbConnection) Snapshot() (*proto.DbSnapshot, error) {
 	snap := &proto.DbSnapshot{Snapshot: connection.db.NewSnapshot()}
 	return snap, nil
 }
 
-func (connection *RocksDbConnection) ReleaseSnapshot(snap *proto.DbSnapshot) error {
-	rocksSnap := snap.Snapshot.(*ratgo.Snapshot)
+func (connection *LevelDbConnection) ReleaseSnapshot(snap *proto.DbSnapshot) error {
+	rocksSnap := snap.Snapshot.(*levigo.Snapshot)
 	connection.db.ReleaseSnapshot(rocksSnap)
 	return nil
 }
 
 // TODO
-type RocksDbCursor struct {
+type LevelDbCursor struct {
 	start    []byte
 	end      []byte
 	limit    int
 	index    int
-	iter     *ratgo.Iterator
+	iter     *levigo.Iterator
 	isClosed bool
 }
 
-func (connection *RocksDbConnection) Iterate(options *proto.DbReadOptions, start []byte, end []byte, limit int) (proto.DbCursor, error) {
-	ro := ratgo.NewReadOptions()
+func (connection *LevelDbConnection) Iterate(options *proto.DbReadOptions, start []byte, end []byte, limit int) (proto.DbCursor, error) {
+	ro := levigo.NewReadOptions()
 	if options != nil {
 		ro.SetFillCache(options.FillCache)
 		ro.SetVerifyChecksums(options.VerifyChecksum)
 	}
 	defer ro.Close()
-	cursor := new(RocksDbCursor)
+	cursor := new(LevelDbCursor)
 	cursor.start = start
 	cursor.end = end
 	if limit == 0 {
@@ -163,7 +162,7 @@ func (connection *RocksDbConnection) Iterate(options *proto.DbReadOptions, start
 	return cursor, nil
 }
 
-func (cursor *RocksDbCursor) Next() {
+func (cursor *LevelDbCursor) Next() {
 	if cursor.isClosed {
 		panic("Cursor is closed")
 	}
@@ -171,39 +170,39 @@ func (cursor *RocksDbCursor) Next() {
 	cursor.iter.Next()
 }
 
-func (cursor *RocksDbCursor) Prev() {
+func (cursor *LevelDbCursor) Prev() {
 	if cursor.isClosed {
 		panic("Cursor is closed")
 	}
 	cursor.iter.Prev()
 }
 
-func (cursor *RocksDbCursor) Valid() bool {
+func (cursor *LevelDbCursor) Valid() bool {
 	if cursor.end != nil {
 		return cursor.iter.Valid() && cursor.index < cursor.limit && bytes.Compare(cursor.iter.Key(), cursor.end) <= 0
 	}
 	return cursor.iter.Valid() && cursor.index < cursor.limit
 }
 
-func (cursor *RocksDbCursor) Close() {
+func (cursor *LevelDbCursor) Close() {
 	cursor.iter.Close()
 	cursor.isClosed = true
 }
 
-func (cursor *RocksDbCursor) Key() []byte {
+func (cursor *LevelDbCursor) Key() []byte {
 	if !cursor.isClosed && cursor.iter.Valid() {
 		return cursor.iter.Key()
 	}
 	return nil
 }
 
-func (cursor *RocksDbCursor) Value() []byte {
+func (cursor *LevelDbCursor) Value() []byte {
 	if !cursor.isClosed && cursor.iter.Valid() {
 		return cursor.iter.Value()
 	}
 	return nil
 }
 
-func (cursor *RocksDbCursor) Error() error {
+func (cursor *LevelDbCursor) Error() error {
 	return cursor.iter.GetError()
 }

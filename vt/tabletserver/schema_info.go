@@ -116,16 +116,16 @@ func testTables() *schema.Table {
 	)
 
 	a := schema.NewTable("a")
-	a.AddColumn("eid", "int", SQLZERO, "", true, false)
 	a.AddColumn("id", "int", SQLZERO, "", true, false)
+	a.AddColumn("eid", "int", SQLZERO, "", false, false)
 	a.AddColumn("name", "varchar(10)", SQLZERO, "", false, true)
 	a.AddColumn("foo", "varchar(10)", SQLZERO, "", false, true)
-	acolumns := []string{"eid", "id", "name", "foo"}
-	a.Indexes = append(a.Indexes, &schema.Index{Name: "PRIMARY", Columns: []string{"eid", "id"}, Cardinality: []uint64{1, 1}, DataColumns: acolumns})
-	a.Indexes = append(a.Indexes, &schema.Index{Name: "a_name", Columns: []string{"eid", "name"}, Cardinality: []uint64{1, 1}, DataColumns: a.Indexes[0].Columns})
+	acolumns := []string{"id", "eid", "name", "foo"}
+	a.Indexes = append(a.Indexes, &schema.Index{Name: "PRIMARY", Columns: []string{"id"}, Cardinality: []uint64{1}, DataColumns: acolumns})
+	a.Indexes = append(a.Indexes, &schema.Index{Name: "a_name", Columns: []string{"id", "name"}, Cardinality: []uint64{1, 1}, DataColumns: a.Indexes[0].Columns})
 	a.Indexes = append(a.Indexes, &schema.Index{Name: "b_name", Columns: []string{"name"}, Cardinality: []uint64{3}, DataColumns: a.Indexes[0].Columns})
 	a.Indexes = append(a.Indexes, &schema.Index{Name: "c_name", Columns: []string{"name"}, Cardinality: []uint64{2}, DataColumns: a.Indexes[0].Columns})
-	a.PKColumns = append(a.PKColumns, 0, 1)
+	a.PKColumns = append(a.PKColumns, 0)
 	a.CacheType = schema.CACHE_RW
 	schem["a"] = a
 
@@ -224,7 +224,6 @@ func (si *SchemaInfo) GetPlan(logStats *sqlQueryStats, sql string) (plan *ExecPl
 	}
 	splan, err := sqlparser.ExecParse(sql, GetTable)
 	if err != nil {
-		panic("test")
 		log.Info("parse error %v", err.Error())
 		panic(NewTabletError(FAIL, "%s", err))
 	}

@@ -41,6 +41,11 @@ func buildTableRowColumnKey(tableName string, columnName string, pk []byte) []by
 	return []byte(fmt.Sprintf("%v|%v|%v", tableName, columnName, pk))
 }
 
+// build secondary index key
+func buildSecondaryIndexKey(tableName, indexName string, value []byte) []byte {
+	return []byte(fmt.Sprintf("%v|index|%v|%v", tableName, indexName, value))
+}
+
 func getTables(conn PoolConnection) (tables []*schema.Table, err error) {
 	var cursor eproto.DbCursor
 	keyStart := buildTablesKey()
@@ -87,21 +92,21 @@ func buildValue(bytes []byte, fieldType int64) sqltypes.Value {
 	return sqltypes.MakeString(bytes)
 }
 
-func buildPkValue(pkList []sqltypes.Value) (pk []byte) {
+func buildCompositeValue(values []sqltypes.Value) []byte {
 	var buffer bytes.Buffer
-	for i, v := range pkList {
+	for i, v := range values {
 		buffer.Write(v.Raw())
-		if i != len(pkList)-1 {
+		if i != len(values)-1 {
 			buffer.WriteByte('|')
 		}
 	}
 	return buffer.Bytes()
 }
 
-// buildValueList builds the set of PK reference rows used to drive the next query.
+// buildPkValueList builds the set of PK reference rows used to drive the next query.
 // It uses the PK values supplied in the original query and bind variables.
 // The generated reference rows are validated for type match against the PK of the table.
-func buildValueList(tableInfo *schema.Table, pkValues []interface{}, bindVars map[string]interface{}) [][]sqltypes.Value {
+func buildPkValueList(tableInfo *schema.Table, pkValues []interface{}, bindVars map[string]interface{}) [][]sqltypes.Value {
 	length := -1
 	for _, pkValue := range pkValues {
 		if list, ok := pkValue.([]interface{}); ok {

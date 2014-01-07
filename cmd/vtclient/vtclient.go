@@ -28,7 +28,7 @@ func init() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, usage)
+		fmt.Fprintln(os.Stderr, usage)
 	}
 }
 
@@ -81,13 +81,12 @@ func FlagMap(name, usage string) (m map[string]interface{}) {
 // query parser if we needed this to be 100% reliable.
 func isDml(sql string) bool {
 	lower := strings.TrimSpace(strings.ToLower(sql))
-	return strings.HasPrefix(lower, "insert") || strings.HasPrefix(lower, "update")
+	return strings.HasPrefix(lower, "insert") || strings.HasPrefix(lower, "update") || strings.HasPrefix(lower, "delete")
 }
 
 func main() {
 	flag.Parse()
 	args := flag.Args()
-
 	if len(args) == 0 {
 		flag.Usage()
 		os.Exit(1)
@@ -95,7 +94,7 @@ func main() {
 
 	conn, err := db.Open(*driver, *server)
 	if err != nil {
-		log.Fatalf("client error: %v", err)
+		log.Fatalf("%v", err)
 	}
 
 	now := time.Now()
@@ -112,18 +111,19 @@ func main() {
 		// launch the query
 		r, err := conn.Exec(args[0], bindvars)
 		if err != nil {
-			log.Fatalf("client error: %v", err)
+			log.Fatalf("%v", err)
 		}
 
 		// get the headers
 		cols := r.Columns()
 		if err != nil {
-			log.Fatalf("client error: %v", err)
+			log.Fatalf("%v", err)
 		}
 
+		n, err := r.RowsAffected()
+		line := "Index:"
 		// print the header
-		if *verbose {
-			line := "Index"
+		if *verbose && n > 0 {
 			for _, field := range cols {
 				line += "\t" + field
 			}
@@ -135,7 +135,7 @@ func main() {
 		for row := r.Next(); row != nil; row = r.Next() {
 			// print the line if needed
 			if *verbose {
-				line := fmt.Sprintf("%d", rowIndex)
+				line := fmt.Sprintf("%-10d", rowIndex)
 				for _, value := range row {
 					if value != nil {
 						switch value.(type) {

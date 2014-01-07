@@ -24,7 +24,7 @@ func main() {
 
 	ts.InitQueryService()
 
-	dbConfigs := &proto.DBConfigs{DataPath: "testrock"}
+	dbConfigs := &proto.DBConfigs{DataPath: "level"}
 	dbConfigs.AppConnectParams = &proto.DbConnectParams{DbName: "test", UserName: "li"}
 	ts.AllowQueries(dbConfigs)
 
